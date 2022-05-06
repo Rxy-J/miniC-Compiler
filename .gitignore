@@ -3,4 +3,5 @@ dist
 *.gv
 *.json
 *.spec
+*.exe
 test.py
