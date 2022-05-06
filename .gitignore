@@ -4,6 +4,7 @@ dist
 *.json
 *.spec
 *.exe
+*.token
 test.py
 __pycache__
 .idea
