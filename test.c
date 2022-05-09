@@ -17,5 +17,5 @@ int main() {
         }
         continue;
     }
-    return add(a, b[3]);
+    return (1 - 2) + f[1][1];
 }

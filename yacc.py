@@ -15,6 +15,15 @@ from graphviz import Digraph
 
 from lex import Token
 
+# TODO: 如下
+"""
+这份代码如果不考虑生成gv图的部分还是可以接受的
+我的想法是写一个ast的解析器用于gv图的生成和后续语义分析
+我更想将当前gv图生成部分从其中分离出来
+"""
+# TODO: 如上
+
+
 DEBUG = False
 
 
@@ -122,7 +131,12 @@ node_type: FUNC // 函数调用
 
 node_type: ARRAY // 数组调用
     info: {
-        pos: Node() // 索引位置
+        "size": x, //数组维度
+        "1": Node(),
+        "2": Node(),
+        ...
+        "i": Node(), // 第i维度长度信息，理论上Node类型为NUM
+        "x": Node()
     }
     
 node_type: RETURN
@@ -160,6 +174,7 @@ class Node:
     """
     结点
     """
+
     def __init__(self, n_type: NodeType, value: str = "", info=None, graph_node: str = ""):
         if info is None:
             info = {}
@@ -192,6 +207,7 @@ class Yacc:
     """
     语法分析器
     """
+
     def __init__(self, tokens: Union[Generator[Token], Iterator[Token]]):
         self.__tokens = tokens
         self.__last_token = None
@@ -217,7 +233,8 @@ class Yacc:
                 f"Excepted {t_type}, Found {self.__curr_token.type if self.__curr_token is not None else 'None'}")
 
     def __error(self, msg: str):
-        print(f"[ERROR] [{self.__curr_token.line if self.__curr_token is not None else self.__last_token.line + 1}]: {msg}")
+        print(
+            f"[ERROR] [{self.__curr_token.line if self.__curr_token is not None else self.__last_token.line + 1}]: {msg}")
         exit(77)
 
     def _remove(self, graph_node: str):
@@ -300,7 +317,7 @@ class Yacc:
                 elif j.node_type == NodeType.INT_ARRAY:
                     arg_head = f"S{S}"
                     S += 1
-                    self.graph.node(arg_head, "int"+"[]"*j.info['size'])
+                    self.graph.node(arg_head, "int" + "[]" * j.info['size'])
                     self.graph.edge(arg_head, j.graph_node)
                     for k in range(j.info['size']):
                         if j.info[f'{j}'] is not None:
@@ -329,7 +346,7 @@ class Yacc:
                         # variable or array
                         if len(i[1]):
                             defvar = Node(NodeType.INT_ARRAY, value=i[0].value, graph_node=f"S{S}")
-                            self.graph.node(defvar.graph_node, "int"+"[]"*len(i[1]))
+                            self.graph.node(defvar.graph_node, "int" + "[]" * len(i[1]))
                             self.graph.edge(defvar.graph_node, i[0].graph_node)
                             info = {"size": len(i[1])}
                             for j in range(info['size']):
@@ -608,15 +625,18 @@ class Yacc:
                     if y_type.node_type == NodeType.INT:
                         if len(i[1]):
                             localvar = Node(NodeType.INT_ARRAY, value=i[0].value, graph_node=f"L{L}")
-                            tmp = localvar.value
+                            array_info = localvar.value
+                            node_val = "int"
                             info = {'size': len(i[1])}
                             for j in range(info['size']):
                                 info[f'{j}'] = i[1][j]
-                                tmp += f"[{i[1][j]}]"
-                            info['array'] = tmp
+                                array_info += f"[{i[1][j]}]"
+                                node_val += "[]"
+                                self.graph.edge(i[0].graph_node, i[1][j].graph_node)
+                            info['array'] = array_info
                             localvar.info = info
                             # for graphviz
-                            self.graph.node(localvar.graph_node, "int")
+                            self.graph.node(localvar.graph_node, node_val)
                             self.graph.edge(localvar.graph_node, i[0].graph_node)
                         else:
                             localvar = Node(NodeType.INT_VAR, value=i[0].value, graph_node=f"L{L}")
@@ -1028,7 +1048,8 @@ class Yacc:
         :return:
         """
         if self.__accept('TIMES') or self.__accept('DIVIDE'):
-            y_muldiv = Node(NodeType.TIMES if self.__last_token.type == 'TIMES' else NodeType.DIVIDE, graph_node=f"P{P}")
+            y_muldiv = Node(NodeType.TIMES if self.__last_token.type == 'TIMES' else NodeType.DIVIDE,
+                            graph_node=f"P{P}")
             # for graphviz
             self.graph.node(y_muldiv.graph_node, self.__last_token.value)
             P += 1
@@ -1058,7 +1079,7 @@ class Yacc:
         y_elem = self.__y_elem()
         if self.__accept('SELF_PLUS') or self.__accept('SELF_MINUS'):
             y_rop = Node(NodeType.SELF_PLUS if self.__last_token.type == 'SELF_PLUS' else NodeType.SELF_MINUS,
-                       value=self.__last_token.value, graph_node=f"P{P}")
+                         value=self.__last_token.value, graph_node=f"P{P}")
             # for graphviz
             self.graph.node(y_rop.graph_node, self.__last_token.value)
             P += 1
@@ -1089,17 +1110,22 @@ class Yacc:
             F += 1
             graph_node_value = self.__last_token.value
             y_idexpr = self.__y_idexpr()
+            # TODO: change the dimension of array: ele -> { '[' expr ']' }
             if y_idexpr is not None:
-                if type(y_idexpr) == Node:
+                if y_idexpr[1] == 'array':
+                    idexpr = y_idexpr[0]
                     y_ident.node_type = NodeType.ARRAY
-                    y_ident.info["pos"] = y_idexpr
-                    graph_node_value += "[]"
-                    self.graph.edge(y_ident.graph_node, y_idexpr.graph_node)
-                elif type(y_idexpr) == list:
+                    y_ident.info['size'] = len(idexpr)
+                    for i in range(y_ident.info['size']):
+                        y_ident.info[f'{i}'] = idexpr[i]
+                        self.graph.edge(y_ident.graph_node, idexpr[i].graph_node)
+                    graph_node_value += "[]" * y_ident.info['size']
+                elif y_idexpr[1] == 'func':
+                    idexpr = y_idexpr[0]
                     y_ident.node_type = NodeType.FUNC
-                    y_ident.info["args"] = y_idexpr
+                    y_ident.info["args"] = idexpr
                     graph_node_value += "()"
-                    for i in y_idexpr:
+                    for i in idexpr:
                         self.graph.edge(y_ident.graph_node, i.graph_node)
             # for graphviz
             self.graph.node(y_ident.graph_node, graph_node_value)
@@ -1107,20 +1133,23 @@ class Yacc:
         else:
             self.__error(f"Excepted '(' or NUM or IDENT, Found '{self.__curr_token.value}'")
 
-    def __y_idexpr(self) -> Union[Node, list[Node], None]:
+    def __y_idexpr(self) -> Union[tuple[list[Node], str], None]:
         """
         解析ID相关调用解析式：数组引用、函数调用参数、空
 
         :return:
         """
         if self.__accept('LBRACE'):
-            y_expr = self.__y_expr()
+            y_array_dime = [self.__y_expr()]
             self.__except('RBRACE')
-            return y_expr
+            while self.__accept('LBRACE'):
+                y_array_dime.append(self.__y_expr())
+                self.__except('RBRACE')
+            return y_array_dime, "array"
         elif self.__accept('LPAREN'):
             y_realargs = self.__y_realarg()
             self.__except('RPAREN')
-            return y_realargs
+            return y_realargs, "func"
         else:
             return None
 
