@@ -10,9 +10,12 @@ import argparse
 import os
 import sys
 import json
+from collections import Generator, Iterator
+from types import Union
 
-from lex import Lex
-from yacc import Yacc, CustomEncoder
+from lex import Lex, Token
+from yacc import Yacc, CustomEncoder, Node
+from analyzer import Analyzer
 from enum import Enum
 
 EXEC_ = "minic.exe" if "win" in sys.platform else "minic"
@@ -31,13 +34,31 @@ class OUTPUT_TYPE(Enum):
     JSON = 1
 
 
+class INPUT_TYPE(Enum):
+    TOKEN = 0
+    NODE = 1
+    TABLE = 2
+
+
 class COMPILE_ACTION(Enum):
     NONE = 0
     LEX = 1
     YACC = 2
     IR = 3
-    ALL = 4
-    COMPLEX = 5
+    ANALYZE = 4
+    ALL = 5
+    COMPLEX = 6
+
+
+def get_info_from_json(json_data: dict):
+    if json_data.get('tokens', None) is not None:
+        pass
+        return INPUT_TYPE.TOKEN, iter([])
+    elif json_data.get('root', None) is not None:
+        pass
+        return INPUT_TYPE.NODE, Node()
+    else:
+        raise Exception("Unsupported JSON content")
 
 
 if __name__ == "__main__":
@@ -46,6 +67,7 @@ if __name__ == "__main__":
     argsParser.add_argument("input", nargs="?", type=str, default=None, metavar="input")
     argsParser.add_argument("-l", "--lex", action="store_true", default=False, dest="lex", help="词法处理")
     argsParser.add_argument("-y", "--yacc", action="store_true", default=False, dest="yacc", help="语法处理")
+    argsParser.add_argument("-a", "--analyze", action="store_true", default=False, dest="analyze", help="语义处理")
     argsParser.add_argument("-i", "--ir", action="store_true", default=False, dest="ir", help="IR生成")
     argsParser.add_argument("-j", "--json", action="store_true", default=False, dest="json", help="输出为json格式")
     argsParser.add_argument("-o", nargs="?", default=None, type=str, dest="output", help="输出文件")
@@ -73,6 +95,8 @@ if __name__ == "__main__":
         task = COMPILE_ACTION.LEX if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
     if opts.yacc:
         task = COMPILE_ACTION.YACC if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
+    if opts.analyze:
+        task = COMPILE_ACTION.ANALYZE if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
     if opts.ir:
         task = COMPILE_ACTION.IR if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
     task = COMPILE_ACTION.ALL if task == COMPILE_ACTION.NONE else task
@@ -137,8 +161,8 @@ if __name__ == "__main__":
             pass
         sys.exit(0)
 
-    # 这里进行语义分析，比如符号表处理
-
+    # 语义分析
+    curr_task = COMPILE_ACTION.ANALYZE
 
     # IR生成
     curr_task = COMPILE_ACTION.IR

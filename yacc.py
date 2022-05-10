@@ -11,7 +11,6 @@ from collections import Generator, Iterator
 from enum import Enum
 from typing import Union, Optional, Any
 from json import JSONEncoder
-from graphviz import Digraph
 
 from lex import Token
 
@@ -178,23 +177,25 @@ class Node:
     结点
     """
 
-    def __init__(self, n_type: NodeType, value: str = "", info=None, graph_node: str = ""):
+    def __init__(self, n_type: NodeType, lineno: int, value: str = "", info=None, node_id: str = ""):
         if info is None:
             info = {}
         self.node_type = n_type
         self.value = value
         self.info = info
-        self.graph_node = graph_node
+        self.lineno = lineno
+        self.node_id = node_id
 
     def __repr__(self):
-        return f"node_type->{self.node_type}, value->{self.value}, info->{self.info}, graph_node->{self.graph_node}"
+        return f"node_type->{self.node_type}, value->{self.value}, lineno->{self.lineno}, info->{self.info}, node_id->{self.node_id}"
 
     def __json__(self):
         return {
             "node_type": self.node_type.name,
             "value": self.value,
+            "lineno": self.lineno,
             "info": self.info,
-            "graph_node": self.graph_node
+            "node_id": self.node_id
         }
 
 
@@ -215,7 +216,7 @@ class Yacc:
         self.__tokens = tokens
         self.__last_token = None
         self.__curr_token = None
-        self.ast = Node(NodeType.ROOT, graph_node="ROOT")
+        self.ast = Node(NodeType.ROOT, lineno=0, node_id="ROOT")
 
     def __next(self):
         self.__last_token, self.__curr_token = self.__curr_token, next(self.__tokens, None)
@@ -288,7 +289,7 @@ class Yacc:
                 if i[0].node_type == NodeType.POINTER:
                     # pointer variable
                     if y_type.node_type == NodeType.INT:
-                        defvar = Node(NodeType.POINTER_INT_VAR, value=i[1].value, graph_node=f"S{S}")
+                        defvar = Node(NodeType.POINTER_INT_VAR, lineno=i[1].lineno, value=i[1].value, node_id=f"S{S}")
                         y_defvars.append(defvar)
                     else:
                         self.__error("VOID Can't be used for POINTER!")
@@ -296,13 +297,13 @@ class Yacc:
                     if y_type.node_type == NodeType.INT:
                         # variable or array
                         if len(i[1]):
-                            defvar = Node(NodeType.INT_ARRAY, value=i[0].value, graph_node=f"S{S}")
+                            defvar = Node(NodeType.INT_ARRAY, lineno=i[0].lineno, value=i[0].value, node_id=f"S{S}")
                             info = {"size": len(i[1])}
                             for j in range(info['size']):
                                 info[f'{j}'] = i[1][j]
                             defvar.info = info
                         else:
-                            defvar = Node(NodeType.INT_VAR, value=i[0].value, graph_node=f"S{S}")
+                            defvar = Node(NodeType.INT_VAR, lineno=i[0].lineno, value=i[0].value, node_id=f"S{S}")
                         y_defvars.append(defvar)
                     else:
                         self.__error("VOID Can't be used for VAR or ARRAY")
@@ -316,9 +317,9 @@ class Yacc:
         :return: 返回类型结点
         """
         if self.__accept('INT'):
-            return Node(NodeType.INT)
+            return Node(NodeType.INT, lineno=self.__last_token.line)
         elif self.__accept('VOID'):
-            return Node(NodeType.VOID)
+            return Node(NodeType.VOID, lineno=self.__last_token.line)
         else:
             self.__error(f"Excepted INT or VOID, Found '{self.__curr_token.value}'")
 
@@ -330,7 +331,7 @@ class Yacc:
         """
         if self.__accept('TIMES'):
             # pointer variable
-            pointer = Node(NodeType.POINTER, "*")
+            pointer = Node(NodeType.POINTER, lineno=self.__last_token.line, value="*")
             y_ident = self.__y_ident()
             y_deflist = self.__y_deflist()
             y_defvar = [[pointer, y_ident]]
@@ -344,7 +345,7 @@ class Yacc:
             if type(y_idtail) == Node:
                 # for function
                 y_idtail.value = y_ident.value
-                y_idtail.graph_node = y_ident.graph_node
+                y_idtail.node_id = y_ident.node_id
                 y_defvar = y_idtail
             else:
                 # for variable or array
@@ -383,7 +384,7 @@ class Yacc:
         """
         if self.__accept('TIMES'):
             # for pointer variable
-            pointer = Node(NodeType.POINTER)
+            pointer = Node(NodeType.POINTER, lineno=self.__last_token.line)
             ident = self.__y_ident()
             return [pointer, ident]
         else:
@@ -412,10 +413,12 @@ class Yacc:
         :return: 若为函数定义，则返回[参数列表，函数体]。若为变量定义，则为[上个标识符维度，[后续变量定义]]
         """
         if self.__accept('LPAREN'):
+            y_func = Node(NodeType.FUNC, lineno=self.__last_token.line)
             y_para = self.__y_para()
             self.__except('RPAREN')
             y_functail = self.__y_functail()
-            return Node(NodeType.FUNC, info={"paras": y_para, "funcbody": y_functail})
+            y_func.info = {"paras": y_para, "funcbody": y_functail}
+            return y_func
         else:
             y_vardef = self.__y_vardef()
             y_deflist = self.__y_deflist()
@@ -434,7 +437,7 @@ class Yacc:
         if self.__accept('SEMICOLON'):
             return None
         elif self.__accept('LBRACKET'):
-            y_block = Node(NodeType.BLOCK, graph_node=f"B{B}")
+            y_block = Node(NodeType.BLOCK, lineno=self.__last_token.line, node_id=f"B{B}")
             B += 1
             y_subprogram = self.__y_subprogram()
             y_block.info["subprogram"] = y_subprogram
@@ -466,20 +469,20 @@ class Yacc:
         y_paradata = self.__y_paradata()
         if y_paradata[0].node_type == NodeType.POINTER:
             if y_type.node_type == NodeType.INT:
-                para = Node(NodeType.POINTER_INT_VAR, value=y_paradata[1].value, graph_node=y_paradata[1].graph_node)
+                para = Node(NodeType.POINTER_INT_VAR, lineno=y_paradata[1].lineno, value=y_paradata[1].value, node_id=y_paradata[1].node_id)
                 return para
             else:
                 self.__error("VOID Can't be used for POINTER!")
         else:
             if y_type.node_type == NodeType.INT:
                 if len(y_paradata[1]):
-                    para = Node(NodeType.INT_ARRAY, value=y_paradata[0].value, graph_node=y_paradata[0].graph_node)
+                    para = Node(NodeType.INT_ARRAY, lineno=y_paradata[0].lineno, value=y_paradata[0].value, node_id=y_paradata[0].node_id)
                     info = {"size": len(y_paradata[1])}
                     for i in range(info['size']):
                         info[f'{i}'] = y_paradata[1][i]
                     para.info = info
                 else:
-                    para = Node(NodeType.INT_VAR, value=y_paradata[0].value, graph_node=y_paradata[0].graph_node)
+                    para = Node(NodeType.INT_VAR, lineno=y_paradata[0].lineno, value=y_paradata[0].value, node_id=y_paradata[0].node_id)
                 return para
             else:
                 self.__error("VOID Can't be used for VAR or ARRAY")
@@ -491,7 +494,7 @@ class Yacc:
         :return:
         """
         if self.__accept('TIMES'):
-            pointer = Node(NodeType.POINTER)
+            pointer = Node(NodeType.POINTER, lineno=self.__last_token.line)
             ident = self.__y_ident()
             return [pointer, ident]
         else:
@@ -543,7 +546,7 @@ class Yacc:
         if self.__accept('INT') or self.__accept('VOID'):
             # for local variable definition
             y_localvars = []
-            y_type = Node(NodeType.INT if self.__last_token.type == 'INT' else NodeType.VOID)
+            y_type = Node(NodeType.INT if self.__last_token.type == 'INT' else NodeType.VOID, lineno=self.__last_token.line)
             y_defdata = self.__y_defdata()
             y_deflist = self.__y_deflist()
             defvars = [y_defdata]
@@ -553,7 +556,7 @@ class Yacc:
                 if i[0].node_type == NodeType.POINTER:
                     # for pointer local variable
                     if y_type.node_type == NodeType.INT:
-                        localvar = Node(NodeType.POINTER_INT_VAR, value=i[1].value, graph_node=f"L{L}")
+                        localvar = Node(NodeType.POINTER_INT_VAR, lineno=i[1].lineno, value=i[1].value, node_id=f"L{L}")
                         L += 1
                         y_localvars.append(localvar)
                     else:
@@ -561,18 +564,13 @@ class Yacc:
                 else:
                     if y_type.node_type == NodeType.INT:
                         if len(i[1]):
-                            localvar = Node(NodeType.INT_ARRAY, value=i[0].value, graph_node=f"L{L}")
-                            array_info = localvar.value
-                            node_val = "int"
+                            localvar = Node(NodeType.INT_ARRAY, lineno=i[0].lineno, value=i[0].value, node_id=f"L{L}")
                             info = {'size': len(i[1])}
                             for j in range(info['size']):
                                 info[f'{j}'] = i[1][j]
-                                array_info += f"[{i[1][j]}]"
-                                node_val += "[]"
-                            info['array'] = array_info
                             localvar.info = info
                         else:
-                            localvar = Node(NodeType.INT_VAR, value=i[0].value, graph_node=f"L{L}")
+                            localvar = Node(NodeType.INT_VAR, lineno=i[0].lineno, value=i[0].value, node_id=f"L{L}")
                         L += 1
                         y_localvars.append(localvar)
                     else:
@@ -585,7 +583,7 @@ class Yacc:
     def __y_statement(self) -> Optional[Node]:
         global T, B
         if self.__accept('WHILE'):
-            y_while = Node(NodeType.WHILE, value='WHILE', graph_node=f"T{T}")
+            y_while = Node(NodeType.WHILE, lineno=self.__last_token.line, value='WHILE', node_id=f"T{T}")
             T += 1
             self.__except('LPAREN')
             y_expr = self.__y_expr()
@@ -598,7 +596,7 @@ class Yacc:
             y_while.info = info
             return y_while
         elif self.__accept('IF'):
-            y_if = Node(NodeType.IF, value='IF', graph_node=f"T{T}")
+            y_if = Node(NodeType.IF, lineno=self.__last_token.line, value='IF', node_id=f"T{T}")
             T += 1
             self.__except('LPAREN')
             y_expr = self.__y_expr()
@@ -613,17 +611,17 @@ class Yacc:
             y_if.info = info
             return y_if
         elif self.__accept('BREAK'):
-            y_break = Node(NodeType.BREAK, value='break', graph_node=f"T{T}")
+            y_break = Node(NodeType.BREAK, lineno=self.__last_token.line, value='break', node_id=f"T{T}")
             T += 1
             self.__except('SEMICOLON')
             return y_break
         elif self.__accept('CONTINUE'):
-            y_continue = Node(NodeType.CONTINUE, value='continue', graph_node=f"T{T}")
+            y_continue = Node(NodeType.CONTINUE, lineno=self.__last_token.line, value='continue', node_id=f"T{T}")
             T += 1
             self.__except('SEMICOLON')
             return y_continue
         elif self.__accept('RETURN'):
-            y_return = Node(NodeType.RETURN, value='return', graph_node=f"T{T}")
+            y_return = Node(NodeType.RETURN, lineno=self.__last_token.line, value='return', node_id=f"T{T}")
             T += 1
             if not self.__accept('SEMICOLON'):
                 y_expr = self.__y_expr()
@@ -631,7 +629,7 @@ class Yacc:
             self.__except('SEMICOLON')
             return y_return
         elif self.__accept('LBRACKET'):
-            y_block = Node(NodeType.BLOCK, graph_node=f"B{B}")
+            y_block = Node(NodeType.BLOCK, lineno=self.__last_token.line, node_id=f"B{B}")
             B += 1
             y_subprogram = self.__y_subprogram()
             y_block.info["subprogram"] = y_subprogram
@@ -646,7 +644,7 @@ class Yacc:
     def __y_elsestat(self) -> Optional[Node]:
         global T
         if self.__accept('ELSE'):
-            y_else = Node(NodeType.ELSE, graph_node=f"T{T}")
+            y_else = Node(NodeType.ELSE, lineno=self.__last_token.line, node_id=f"T{T}")
             T += 1
             y_statement = self.__y_statement()
             y_else.info['statement'] = y_statement
@@ -695,7 +693,7 @@ class Yacc:
         :return:
         """
         if self.__accept('ASSIGN'):
-            y_assign = Node(NodeType.ASSIGN, graph_node=f"P{P}")
+            y_assign = Node(NodeType.ASSIGN, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_assexpr = self.__y_assexpr()
             y_asstail = self.__y_asstail()
@@ -717,7 +715,7 @@ class Yacc:
         :return:
         """
         if self.__accept('LOGIC_OR'):
-            y_logic_or = Node(NodeType.LOGIC_OR, graph_node=f"P{P}")
+            y_logic_or = Node(NodeType.LOGIC_OR, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_andexpr = self.__y_andexpr()
             y_ortail = self.__y_ortail()
@@ -752,7 +750,7 @@ class Yacc:
         :return:
         """
         if self.__accept('LOGIC_AND'):
-            y_logic_and = Node(NodeType.LOGIC_AND, graph_node=f"P{P}")
+            y_logic_and = Node(NodeType.LOGIC_AND, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_cmpexpr = self.__y_cmpexpr()
             y_andtail = self.__y_andtail()
@@ -801,7 +799,7 @@ class Yacc:
             else:
                 cmp = NodeType.NEQ
             self.__next()
-            y_cmps = Node(cmp, value=self.__last_token.value, graph_node=f"P{P}")
+            y_cmps = Node(cmp, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
             P += 1
             y_aloexpr = self.__y_aloexpr()
             y_cmptail = self.__y_cmptail()
@@ -832,7 +830,10 @@ class Yacc:
         :return:
         """
         if self.__accept('PLUS') or self.__accept('MINUS'):
-            y_addsub = Node(NodeType.PLUS if self.__last_token.type == 'PLUS' else NodeType.MINUS, graph_node=f"P{P}")
+            if self.__last_token.type == 'PLUS':
+                y_addsub = Node(NodeType.PLUS, lineno=self.__last_token.line, node_id=f"P{P}")
+            else:
+                y_addsub = Node(NodeType.MINUS, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_item = self.__y_item()
             y_alotail = self.__y_alotail()
@@ -881,9 +882,9 @@ class Yacc:
             else:
                 lop = NodeType.SELF_MINUS
             self.__next()
-            y_lop = Node(lop, value=self.__last_token.value, graph_node=f"P{P}")
+            y_lop = Node(lop, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
             P += 1
-            y_unary_left = Node(NodeType.UNARY_LEFT, graph_node=f"P{P}")
+            y_unary_left = Node(NodeType.UNARY_LEFT, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_factor = self.__y_factor()
             y_unary_left.info['lop'] = y_lop
@@ -902,11 +903,11 @@ class Yacc:
         """
         if self.__accept('TIMES') or self.__accept('DIVIDE') or self.__accept('MOD'):
             if self.__last_token.type == 'TIMES':
-                y_muldiv = Node(NodeType.TIMES, graph_node=f"P{P}")
+                y_muldiv = Node(NodeType.TIMES, lineno=self.__last_token.line, node_id=f"P{P}")
             elif self.__last_token.type == 'DIVIDE':
-                y_muldiv = Node(NodeType.DIVIDE, graph_node=f"P{P}")
+                y_muldiv = Node(NodeType.DIVIDE, lineno=self.__last_token.line, node_id=f"P{P}")
             else:
-                y_muldiv = Node(NodeType.MOD, graph_node=f"P{P}")
+                y_muldiv = Node(NodeType.MOD, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_factor = self.__y_factor()
             y_itemtail = self.__y_itemtail()
@@ -928,10 +929,12 @@ class Yacc:
         """
         y_elem = self.__y_elem()
         while self.__accept('SELF_PLUS') or self.__accept('SELF_MINUS'):
-            y_unary_right = Node(NodeType.UNARY_RIGHT, graph_node=f"P{P}")
+            if self.__last_token.type == 'SELF_PLUS':
+                y_rop = Node(NodeType.SELF_PLUS, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
+            else:
+                y_rop = Node(NodeType.SELF_MINUS, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
             P += 1
-            y_rop = Node(NodeType.SELF_PLUS if self.__last_token.type == 'SELF_PLUS' else NodeType.SELF_MINUS,
-                         value=self.__last_token.value, graph_node=f"P{P}")
+            y_unary_right = Node(NodeType.UNARY_RIGHT, lineno=self.__last_token.line, node_id=f"P{P}")
             P += 1
             y_unary_right.info['rop'] = y_rop
             y_unary_right.info['target'] = y_elem
@@ -950,15 +953,14 @@ class Yacc:
             self.__except('RPAREN')
             return y_expr
         elif self.__accept('NUM'):
-            y_num = Node(NodeType.NUM, value=self.__last_token.value, graph_node=f"F{F}")
+            y_num = Node(NodeType.NUM, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
             F += 1
             return y_num
         elif self.__accept('IDENT'):
-            y_ident = Node(NodeType.IDENT, value=self.__last_token.value, graph_node=f"F{F}")
+            y_ident = Node(NodeType.IDENT, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
             F += 1
             graph_node_value = self.__last_token.value
             y_idexpr = self.__y_idexpr()
-            # TODO: change the dimension of array: ele -> { '[' expr ']' }
             if y_idexpr is not None:
                 if y_idexpr[1] == 'array':
                     idexpr = y_idexpr[0]
@@ -1021,7 +1023,7 @@ class Yacc:
         :return:
         """
         if self.__accept('NUM'):
-            tmp = Node(NodeType.NUM, self.__last_token.value, graph_node=f"F{F}")
+            tmp = Node(NodeType.NUM, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
             F += 1
             return tmp
         else:
@@ -1035,7 +1037,7 @@ class Yacc:
         :return:
         """
         if self.__accept('IDENT'):
-            tmp = Node(NodeType.IDENT, value=self.__last_token.value, graph_node=f"F{F}")
+            tmp = Node(NodeType.IDENT, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
             F += 1
             return tmp
         else:

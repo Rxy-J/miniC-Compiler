@@ -7,8 +7,12 @@
 @Date ：2022/5/9 14:48
 """
 
+import re
+
 DEFINE = "define"
 DECLARE = "declare"
+
+VAR_NAME_PATTERN = r'[-a-zA-Z_][-a-zA-Z0-9_]*'
 
 """
 LLVM Global Variable Definition
@@ -51,12 +55,22 @@ LLVM Ifunc Definition(for function)
 """
 
 
-class llvm:
+class LLVM:
     def __init__(self):
         pass
+
+    def __error(self, msg: str, lineno: int):
+        print(f"[ERROR] [{lineno}]: {msg}")
 
     def set_comment(self, content: str):
         return f"; {content}"
 
     def set_global_val(self, name: str, size: int = 32):
-        return f"{DEFINE} i{size} {name}"
+        if re.match(VAR_NAME_PATTERN, name) is None:
+            self.__error(f"{name} is not match GlobalVarName requirement: {VAR_NAME_PATTERN}", -1)
+            return None
+        return f"{DEFINE} i{size} @{name}"
+
+
+if __name__ == "__main__":
+    print(LLVM().set_global_val("a123"))
