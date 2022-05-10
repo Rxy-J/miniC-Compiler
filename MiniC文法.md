@@ -51,15 +51,15 @@ G[<program>]:
 <addsub> → '+' | '-'
 <item> → <factor> <itemtail>
 <itemtail> → <muldiv> <factor> <itemtail> | ε
-<muldiv> → '*' | '/'
+<muldiv> → '*' | '/' | '%'
 <factor> → <lop> <factor> | <val>
 <lop>  → '!' | '-' | '&' | '*' | <incr> | <decr>
-<val> → <elem> [ <rop> ]
+<val> → <elem> { <rop> }
 <rop> → <incr> | <decr>
 <incr> → '++'
 <decr> → '--'
 <elem> → ident <idexpr> | '(' <expr> ')' | <literal>
-<idexpr> → '[' <expr> ']' | '(' <realarg> ')' | ε
+<idexpr> → {'[' <expr> ']'} | '(' <realarg> ')' | ε
 <literal> → num
 <realarg> → <arg> {',' <arg>} | ε
 <arg> → <expr>

@@ -122,7 +122,6 @@ if __name__ == "__main__":
     yy = Yacc(tokens)
     yy.parser()
     json_ast = {"root": yy.ast}  # 该AST原生格式为JSON格式
-    gv_ast = yy.graph.source  # AST生成过程会同时生成graph
 
     # 如果目标任务为语法分析
     if curr_task.value >= task.value:
@@ -135,14 +134,10 @@ if __name__ == "__main__":
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(jsonify_ast)
         else:
-            if output_dest == OUTPUT_TARGET.STDOUT:
-                print(gv_ast)
-            else:
-                with open(output_file, "w", encoding="utf-8") as f:
-                    f.write(gv_ast)
+            pass
         sys.exit(0)
 
-    # 这里进行一些预处理，比如符号表处理
+    # 这里进行语义分析，比如符号表处理
 
 
     # IR生成

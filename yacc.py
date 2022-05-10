@@ -76,6 +76,9 @@ class NodeType(Enum):
     EQ = 54
     NEQ = 55
     ASSIGN = 56
+    MOD = 57
+    UNARY_LEFT = 58
+    UNARY_RIGHT = 59
 
 
 class CustomEncoder(JSONEncoder):
@@ -213,7 +216,6 @@ class Yacc:
         self.__last_token = None
         self.__curr_token = None
         self.ast = Node(NodeType.ROOT, graph_node="ROOT")
-        self.graph = Digraph("G")
 
     def __next(self):
         self.__last_token, self.__curr_token = self.__curr_token, next(self.__tokens, None)
@@ -237,12 +239,6 @@ class Yacc:
             f"[ERROR] [{self.__curr_token.line if self.__curr_token is not None else self.__last_token.line + 1}]: {msg}")
         exit(77)
 
-    def _remove(self, graph_node: str):
-        for i in self.graph.body:
-            if graph_node in i:
-                self.graph.body.remove(i)
-                break
-
     def parser(self) -> None:
         """
         语法解析
@@ -251,11 +247,6 @@ class Yacc:
         """
         self.__next()
         self.ast.info['program'] = self.__y_program()
-        self.graph.node("ROOT", "root", shape="rectangle")
-        self.graph.node("PROGRAM", "program", shape="rectangle")
-        self.graph.edge("ROOT", "PROGRAM")
-        for i in self.ast.info['program']:
-            self.graph.edge("PROGRAM", i.graph_node)
 
     def __y_program(self) -> list[Node]:
         global S
@@ -289,46 +280,8 @@ class Yacc:
             # function
             if y_type.node_type == NodeType.INT:
                 y_def.node_type = NodeType.INT_FUNC
-                i_type = 'int func'
             else:
                 y_def.node_type = NodeType.VOID_FUNC
-                i_type = 'void func'
-            # for graphviz
-            func_head = f"S{S}"
-            S += 1
-            paras = f"S{S}"
-            S += 1
-            self.graph.node(func_head, i_type)
-            self.graph.node(paras, "paras")
-            self.graph.edge(func_head, y_def.graph_node)
-            self.graph.edge(y_def.graph_node, paras)
-            self.graph.edge(y_def.graph_node, y_def.info['funcbody'].graph_node)
-            for j in y_def.info['paras']:
-                if j.node_type == NodeType.INT_VAR:
-                    arg_head = f"S{S}"
-                    S += 1
-                    self.graph.node(arg_head, "int")
-                    self.graph.edge(arg_head, j.graph_node)
-                elif j.node_type == NodeType.POINTER_INT_VAR:
-                    arg_head = f"S{S}"
-                    S += 1
-                    self.graph.node(arg_head, "int*")
-                    self.graph.edge(arg_head, j.graph_node)
-                elif j.node_type == NodeType.INT_ARRAY:
-                    arg_head = f"S{S}"
-                    S += 1
-                    self.graph.node(arg_head, "int" + "[]" * j.info['size'])
-                    self.graph.edge(arg_head, j.graph_node)
-                    for k in range(j.info['size']):
-                        if j.info[f'{j}'] is not None:
-                            self.graph.edge(j.graph_node, j.info[f'{j}'].graph_node)
-                        else:
-                            self.graph.node(f"S{S}", "ANY")
-                            self.graph.edge(j.graph_node, f"S{S}")
-                            S += 1
-                self.graph.edge(paras, arg_head)
-            y_def.graph_node = func_head
-            # end of graphviz
             return y_def
         else:
             for i in y_def:
@@ -336,8 +289,6 @@ class Yacc:
                     # pointer variable
                     if y_type.node_type == NodeType.INT:
                         defvar = Node(NodeType.POINTER_INT_VAR, value=i[1].value, graph_node=f"S{S}")
-                        self.graph.node(defvar.graph_node, "int*")
-                        self.graph.edge(defvar.graph_node, i[1].graph_node)
                         y_defvars.append(defvar)
                     else:
                         self.__error("VOID Can't be used for POINTER!")
@@ -346,17 +297,12 @@ class Yacc:
                         # variable or array
                         if len(i[1]):
                             defvar = Node(NodeType.INT_ARRAY, value=i[0].value, graph_node=f"S{S}")
-                            self.graph.node(defvar.graph_node, "int" + "[]" * len(i[1]))
-                            self.graph.edge(defvar.graph_node, i[0].graph_node)
                             info = {"size": len(i[1])}
                             for j in range(info['size']):
                                 info[f'{j}'] = i[1][j]
-                                self.graph.edge(i[0].graph_node, i[1][j].graph_node)
                             defvar.info = info
                         else:
                             defvar = Node(NodeType.INT_VAR, value=i[0].value, graph_node=f"S{S}")
-                            self.graph.node(defvar.graph_node, "int")
-                            self.graph.edge(defvar.graph_node, i[0].graph_node)
                         y_defvars.append(defvar)
                     else:
                         self.__error("VOID Can't be used for VAR or ARRAY")
@@ -489,13 +435,8 @@ class Yacc:
             return None
         elif self.__accept('LBRACKET'):
             y_block = Node(NodeType.BLOCK, graph_node=f"B{B}")
-            # for graphviz
-            self.graph.node(y_block.graph_node, "Block")
             B += 1
             y_subprogram = self.__y_subprogram()
-            # for graphviz
-            for i in y_subprogram:
-                self.graph.edge(y_block.graph_node, i.graph_node)
             y_block.info["subprogram"] = y_subprogram
             self.__except('RBRACKET')
             return y_block
@@ -613,10 +554,6 @@ class Yacc:
                     # for pointer local variable
                     if y_type.node_type == NodeType.INT:
                         localvar = Node(NodeType.POINTER_INT_VAR, value=i[1].value, graph_node=f"L{L}")
-                        # for graphviz
-                        self._remove(i[1].graph_node)
-                        self.graph.node(localvar.graph_node, "int*")
-                        self.graph.edge(localvar.graph_node, i[1].graph_node)
                         L += 1
                         y_localvars.append(localvar)
                     else:
@@ -632,16 +569,10 @@ class Yacc:
                                 info[f'{j}'] = i[1][j]
                                 array_info += f"[{i[1][j]}]"
                                 node_val += "[]"
-                                self.graph.edge(i[0].graph_node, i[1][j].graph_node)
                             info['array'] = array_info
                             localvar.info = info
-                            # for graphviz
-                            self.graph.node(localvar.graph_node, node_val)
-                            self.graph.edge(localvar.graph_node, i[0].graph_node)
                         else:
                             localvar = Node(NodeType.INT_VAR, value=i[0].value, graph_node=f"L{L}")
-                            self.graph.node(localvar.graph_node, "int")
-                            self.graph.edge(localvar.graph_node, i[0].graph_node)
                         L += 1
                         y_localvars.append(localvar)
                     else:
@@ -655,8 +586,6 @@ class Yacc:
         global T, B
         if self.__accept('WHILE'):
             y_while = Node(NodeType.WHILE, value='WHILE', graph_node=f"T{T}")
-            # for graphviz
-            self.graph.node(y_while.graph_node, "while")
             T += 1
             self.__except('LPAREN')
             y_expr = self.__y_expr()
@@ -667,15 +596,9 @@ class Yacc:
                 "statement": y_statement
             }
             y_while.info = info
-            # for graphviz
-            self.graph.edge(y_while.graph_node, y_expr.graph_node)
-            if y_statement is not None:
-                self.graph.edge(y_while.graph_node, y_statement.graph_node)
             return y_while
         elif self.__accept('IF'):
             y_if = Node(NodeType.IF, value='IF', graph_node=f"T{T}")
-            # for graphviz
-            self.graph.node(y_if.graph_node, "if")
             T += 1
             self.__except('LPAREN')
             y_expr = self.__y_expr()
@@ -688,47 +611,29 @@ class Yacc:
                 "elsestat": y_elsestat
             }
             y_if.info = info
-            # for graphviz
-            self.graph.edge(y_if.graph_node, y_expr.graph_node)
-            if y_statement is not None:
-                self.graph.edge(y_if.graph_node, y_statement.graph_node)
-            if y_elsestat is not None:
-                self.graph.edge(y_if.graph_node, y_elsestat.graph_node)
             return y_if
         elif self.__accept('BREAK'):
             y_break = Node(NodeType.BREAK, value='break', graph_node=f"T{T}")
-            # for graphviz
-            self.graph.node(y_break.graph_node, "break")
             T += 1
             self.__except('SEMICOLON')
             return y_break
         elif self.__accept('CONTINUE'):
             y_continue = Node(NodeType.CONTINUE, value='continue', graph_node=f"T{T}")
-            # for graphviz
-            self.graph.node(y_continue.graph_node, "continue")
             T += 1
             self.__except('SEMICOLON')
             return y_continue
         elif self.__accept('RETURN'):
             y_return = Node(NodeType.RETURN, value='return', graph_node=f"T{T}")
-            # for graphviz
-            self.graph.node(y_return.graph_node, "return")
             T += 1
             if not self.__accept('SEMICOLON'):
                 y_expr = self.__y_expr()
                 y_return.info = {"return_expr": y_expr}
-                # for graphviz
-                self.graph.edge(y_return.graph_node, y_expr.graph_node)
             self.__except('SEMICOLON')
             return y_return
         elif self.__accept('LBRACKET'):
             y_block = Node(NodeType.BLOCK, graph_node=f"B{B}")
-            self.graph.node(y_block.graph_node, "Block")
             B += 1
             y_subprogram = self.__y_subprogram()
-            # for graphviz
-            for i in y_subprogram:
-                self.graph.edge(y_block.graph_node, i.graph_node)
             y_block.info["subprogram"] = y_subprogram
             self.__except('RBRACKET')
             return y_block
@@ -742,12 +647,8 @@ class Yacc:
         global T
         if self.__accept('ELSE'):
             y_else = Node(NodeType.ELSE, graph_node=f"T{T}")
-            # for graphviz
-            self.graph.node(y_else.graph_node, "else")
             T += 1
             y_statement = self.__y_statement()
-            if y_statement is not None:
-                self.graph.edge(y_else.graph_node, y_statement.graph_node)
             y_else.info['statement'] = y_statement
             return y_else
         else:
@@ -770,8 +671,6 @@ class Yacc:
         y_asstail = self.__y_asstail()
         if y_asstail is not None:
             y_asstail.info['lvar'] = y_orexpr
-            # for graphviz
-            self.graph.edge(y_asstail.graph_node, y_orexpr.graph_node)
             return y_asstail
         else:
             return y_orexpr
@@ -785,8 +684,6 @@ class Yacc:
         y_ortail = self.__y_ortail()
         if y_ortail is not None:
             y_ortail.info['lvar'] = y_andexpr
-            # for graphviz
-            self.graph.edge(y_ortail.graph_node, y_andexpr.graph_node)
             return y_ortail
         else:
             return y_andexpr
@@ -799,22 +696,15 @@ class Yacc:
         """
         if self.__accept('ASSIGN'):
             y_assign = Node(NodeType.ASSIGN, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_assign.graph_node, "=")
             P += 1
             y_assexpr = self.__y_assexpr()
             y_asstail = self.__y_asstail()
             if y_asstail is not None:
                 y_asstail.info['lvar'] = y_assexpr
                 y_assign.info['rvar'] = y_asstail
-                # for graphviz
-                self.graph.edge(y_asstail.graph_node, y_assexpr.graph_node)
-                self.graph.edge(y_assign.graph_node, y_asstail.graph_node)
                 return y_assign
             else:
                 y_assign.info['rvar'] = y_assexpr
-                # for graphviz
-                self.graph.edge(y_assign.graph_node, y_assexpr.graph_node)
                 return y_assign
         else:
             return None
@@ -828,22 +718,15 @@ class Yacc:
         """
         if self.__accept('LOGIC_OR'):
             y_logic_or = Node(NodeType.LOGIC_OR, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_logic_or.graph_node, "||")
             P += 1
             y_andexpr = self.__y_andexpr()
             y_ortail = self.__y_ortail()
             if y_ortail is not None:
                 y_ortail.info['lvar'] = y_andexpr
                 y_logic_or.info['rvar'] = y_ortail
-                # for graphviz
-                self.graph.edge(y_ortail.graph_node, y_andexpr.graph_node)
-                self.graph.edge(y_logic_or.graph_node, y_ortail.graph_node)
                 return y_logic_or
             else:
                 y_logic_or.info['rvar'] = y_andexpr
-                # for graphviz
-                self.graph.edge(y_logic_or.graph_node, y_andexpr.graph_node)
                 return y_logic_or
         else:
             return None
@@ -857,8 +740,6 @@ class Yacc:
         y_andtail = self.__y_andtail()
         if y_andtail is not None:
             y_andtail.info['lvar'] = y_cmpexpr
-            # for graphviz
-            self.graph.edge(y_andtail.graph_node, y_cmpexpr.graph_node)
             return y_andtail
         else:
             return y_cmpexpr
@@ -872,22 +753,15 @@ class Yacc:
         """
         if self.__accept('LOGIC_AND'):
             y_logic_and = Node(NodeType.LOGIC_AND, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_logic_and.graph_node, "&&")
             P += 1
             y_cmpexpr = self.__y_cmpexpr()
             y_andtail = self.__y_andtail()
             if y_andtail is not None:
                 y_andtail.info['lvar'] = y_cmpexpr
                 y_logic_and.info['rvar'] = y_andtail
-                # for graphviz
-                self.graph.edge(y_andtail.graph_node, y_cmpexpr.graph_node)
-                self.graph.edge(y_logic_and.graph_node, y_andtail.graph_node)
                 return y_logic_and
             else:
                 y_logic_and.info['rvar'] = y_cmpexpr
-                # for graphviz
-                self.graph.edge(y_logic_and.graph_node, y_cmpexpr.graph_node)
                 return y_logic_and
         else:
             return None
@@ -902,8 +776,6 @@ class Yacc:
         y_cmptail = self.__y_cmptail()
         if y_cmptail is not None:
             y_cmptail.info['lvar'] = y_aloexpr
-            # for graphviz
-            self.graph.edge(y_cmptail.graph_node, y_aloexpr.graph_node)
             return y_cmptail
         else:
             return y_aloexpr
@@ -930,22 +802,15 @@ class Yacc:
                 cmp = NodeType.NEQ
             self.__next()
             y_cmps = Node(cmp, value=self.__last_token.value, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_cmps.graph_node, self.__last_token.value)
             P += 1
             y_aloexpr = self.__y_aloexpr()
             y_cmptail = self.__y_cmptail()
             if y_cmptail is not None:
                 y_cmptail.info['lvar'] = y_aloexpr
                 y_cmps.info['rval'] = y_cmptail
-                # for graphviz
-                self.graph.edge(y_cmptail.graph_node, y_aloexpr.graph_node)
-                self.graph.edge(y_cmps.graph_node, y_cmptail.graph_node)
                 return y_cmps
             else:
                 y_cmps.info['rval'] = y_aloexpr
-                # for graphviz
-                self.graph.edge(y_cmps.graph_node, y_aloexpr.graph_node)
                 return y_cmps
         else:
             return None
@@ -955,8 +820,6 @@ class Yacc:
         y_alotail = self.__y_alotail()
         if y_alotail is not None:
             y_alotail.info['lvar'] = y_item
-            # for graphviz
-            self.graph.edge(y_alotail.graph_node, y_item.graph_node)
             return y_alotail
         else:
             return y_item
@@ -970,22 +833,15 @@ class Yacc:
         """
         if self.__accept('PLUS') or self.__accept('MINUS'):
             y_addsub = Node(NodeType.PLUS if self.__last_token.type == 'PLUS' else NodeType.MINUS, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_addsub.graph_node, self.__last_token.value)
             P += 1
             y_item = self.__y_item()
             y_alotail = self.__y_alotail()
             if y_alotail is not None:
                 y_alotail.info['lvar'] = y_item
                 y_addsub.info['rvar'] = y_alotail
-                # for graphviz
-                self.graph.edge(y_alotail.graph_node, y_item.graph_node)
-                self.graph.edge(y_addsub.graph_node, y_alotail.graph_node)
                 return y_addsub
             else:
                 y_addsub.info['rvar'] = y_item
-                # for graphviz
-                self.graph.edge(y_addsub.graph_node, y_item.graph_node)
                 return y_addsub
         else:
             return None
@@ -1000,8 +856,6 @@ class Yacc:
         y_itemtail = self.__y_itemtail()
         if y_itemtail is not None:
             y_itemtail.info['lvar'] = y_factor
-            # for graphviz
-            self.graph.edge(y_itemtail.graph_node, y_factor.graph_node)
             return y_itemtail
         else:
             return y_factor
@@ -1028,14 +882,13 @@ class Yacc:
                 lop = NodeType.SELF_MINUS
             self.__next()
             y_lop = Node(lop, value=self.__last_token.value, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_lop.graph_node, self.__last_token.value)
+            P += 1
+            y_unary_left = Node(NodeType.UNARY_LEFT, graph_node=f"P{P}")
             P += 1
             y_factor = self.__y_factor()
-            y_factor.info['lop'] = y_lop
-            # for graphviz
-            self.graph.edge(y_factor.graph_node, y_lop.graph_node)
-            return y_factor
+            y_unary_left.info['lop'] = y_lop
+            y_unary_left.info['target'] = y_factor
+            return y_unary_left
         else:
             y_val = self.__y_val()
             return y_val
@@ -1047,24 +900,21 @@ class Yacc:
 
         :return:
         """
-        if self.__accept('TIMES') or self.__accept('DIVIDE'):
-            y_muldiv = Node(NodeType.TIMES if self.__last_token.type == 'TIMES' else NodeType.DIVIDE,
-                            graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_muldiv.graph_node, self.__last_token.value)
+        if self.__accept('TIMES') or self.__accept('DIVIDE') or self.__accept('MOD'):
+            if self.__last_token.type == 'TIMES':
+                y_muldiv = Node(NodeType.TIMES, graph_node=f"P{P}")
+            elif self.__last_token.type == 'DIVIDE':
+                y_muldiv = Node(NodeType.DIVIDE, graph_node=f"P{P}")
+            else:
+                y_muldiv = Node(NodeType.MOD, graph_node=f"P{P}")
             P += 1
             y_factor = self.__y_factor()
             y_itemtail = self.__y_itemtail()
             if y_itemtail is not None:
                 y_itemtail.info['lvar'] = y_factor
                 y_muldiv.info['rvar'] = y_itemtail
-                # for graphviz
-                self.graph.edge(y_itemtail.graph_node, y_factor.graph_node)
-                self.graph.edge(y_muldiv.graph_node, y_itemtail.graph_node)
             else:
                 y_muldiv.info['rvar'] = y_factor
-                # for graphviz
-                self.graph.edge(y_muldiv.graph_node, y_factor.graph_node)
             return y_muldiv
         else:
             return None
@@ -1077,15 +927,15 @@ class Yacc:
         :return:
         """
         y_elem = self.__y_elem()
-        if self.__accept('SELF_PLUS') or self.__accept('SELF_MINUS'):
+        while self.__accept('SELF_PLUS') or self.__accept('SELF_MINUS'):
+            y_unary_right = Node(NodeType.UNARY_RIGHT, graph_node=f"P{P}")
+            P += 1
             y_rop = Node(NodeType.SELF_PLUS if self.__last_token.type == 'SELF_PLUS' else NodeType.SELF_MINUS,
                          value=self.__last_token.value, graph_node=f"P{P}")
-            # for graphviz
-            self.graph.node(y_rop.graph_node, self.__last_token.value)
             P += 1
-            y_elem.info["rop"] = y_rop
-            # for graphviz
-            self.graph.edge(y_elem.graph_node, y_rop.graph_node)
+            y_unary_right.info['rop'] = y_rop
+            y_unary_right.info['target'] = y_elem
+            y_elem = y_unary_right
         return y_elem
 
     def __y_elem(self) -> Node:
@@ -1101,8 +951,6 @@ class Yacc:
             return y_expr
         elif self.__accept('NUM'):
             y_num = Node(NodeType.NUM, value=self.__last_token.value, graph_node=f"F{F}")
-            # for graphviz
-            self.graph.node(y_num.graph_node, self.__last_token.value)
             F += 1
             return y_num
         elif self.__accept('IDENT'):
@@ -1118,17 +966,12 @@ class Yacc:
                     y_ident.info['size'] = len(idexpr)
                     for i in range(y_ident.info['size']):
                         y_ident.info[f'{i}'] = idexpr[i]
-                        self.graph.edge(y_ident.graph_node, idexpr[i].graph_node)
                     graph_node_value += "[]" * y_ident.info['size']
                 elif y_idexpr[1] == 'func':
                     idexpr = y_idexpr[0]
                     y_ident.node_type = NodeType.FUNC
                     y_ident.info["args"] = idexpr
                     graph_node_value += "()"
-                    for i in idexpr:
-                        self.graph.edge(y_ident.graph_node, i.graph_node)
-            # for graphviz
-            self.graph.node(y_ident.graph_node, graph_node_value)
             return y_ident
         else:
             self.__error(f"Excepted '(' or NUM or IDENT, Found '{self.__curr_token.value}'")
@@ -1179,8 +1022,6 @@ class Yacc:
         """
         if self.__accept('NUM'):
             tmp = Node(NodeType.NUM, self.__last_token.value, graph_node=f"F{F}")
-            # for graphviz
-            self.graph.node(tmp.graph_node, self.__last_token.value)
             F += 1
             return tmp
         else:
@@ -1195,8 +1036,6 @@ class Yacc:
         """
         if self.__accept('IDENT'):
             tmp = Node(NodeType.IDENT, value=self.__last_token.value, graph_node=f"F{F}")
-            # for graphviz
-            self.graph.node(tmp.graph_node, self.__last_token.value)
             F += 1
             return tmp
         else:
