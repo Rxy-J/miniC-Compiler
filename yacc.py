@@ -523,7 +523,7 @@ class Yacc:
                 self.__except('RBRACE')
         return dem
 
-    def __y_subprogram(self):
+    def __y_subprogram(self) -> list[Node]:
         """
         内部代码块
 
