@@ -34,11 +34,13 @@ class Sentence_Type(Enum):
 
 class CustomJsonEncoder(JSONEncoder):
     """
-    For Class Sentence
+    For Class Sentence and Class Symbol
     """
 
     def default(self, o: Any) -> Any:
         if isinstance(o, Sentence):
+            return o.__json__()
+        elif isinstance(o, Symbol):
             return o.__json__()
 
 
@@ -48,35 +50,53 @@ class Sentence:
     The format of result closes to IR
     """
 
-    def __init__(self, sentence_type: Sentence_Type, value: str, lineno: int, label: str = None, info: dict = None):
+    def __init__(self,
+                 sentence_type: Sentence_Type,
+                 value: str,
+                 lineno: int,
+                 label: str = None,
+                 reg: str = None,
+                 info: dict = None):
         if info is None:
             info = {}
         self.sentence_type = sentence_type
         self.value = value
         self.lineno = lineno
         self.label = label
+        self.reg = reg
         self.info = info
 
     def __repr__(self) -> str:
-        return f"sentence_type->{self.sentence_type.value}, " \
+        return f"sentence_type->{self.sentence_type.name}, " \
                f"value->{self.value}, " \
                f"lineno->{self.lineno}, " \
                f"label->{self.label}, " \
+               f"reg->{self.reg}, " \
                f"info->{self.info}"
 
     def __json__(self) -> dict:
         return {
-            "sentence_type": self.sentence_type.value,
+            "sentence_type": self.sentence_type.name,
             "value": self.value,
             "lineno": self.lineno,
             "label": self.label,
+            "reg": self.reg,
             "info": self.info
         }
 
 
 class Symbol:
-    def __init__(self, value: str, symbol_type: str, reg: str, size: int = None, dimension: list = None,
-                 lineno: int = 0, init_value: str = None, func_paras: list=None):
+    def __init__(self,
+                 value: str,
+                 symbol_type: str,
+                 reg: str = None,
+                 size: int = None,
+                 dimension: list = None,
+                 lineno: int = 0,
+                 init_value: str = None,
+                 func_paras: list = None,
+                 func_entry: str = None,
+                 func_leave: str = None):
         self.value = value
         self.symbol_type = symbol_type
         self.reg = reg
@@ -85,6 +105,12 @@ class Symbol:
         self.lineno = lineno
         self.init_value = init_value
         self.func_paras = func_paras
+        self.func_entry = func_entry
+        self.func_leave = func_leave
+
+    def __repr__(self):
+        return f"value->{self.value}, " \
+               f"symbol_type->{self.symbol_type}"
 
     def __json__(self):
         return {
@@ -105,32 +131,51 @@ class Analyzer:
 
         :param ast: An AST
         """
-        self.__ast = ast
+        self.__ast: Node = ast
         # each element is a dict that contains block_id and variable_definition
         self.__variable_stack: list[dict[str:Symbol]] = []
-        self.__curr_var_table = {}
+        self.__curr_var_table: dict[str:Symbol] = {}
         # key is function name and value is a dict that contains return type, parameters and entry label
-        self.__function_table = {}
-        # this two stack is used to storage jump label for logical calculation
-        self.__true_stack = []
-        self.__false_stack = []
-        # this two stack is used to storage jump label for loop, mainly for break and continue
-        self.__loop_stack = []
-        self.__leave_stack = []
+        self.__function_table: dict[str:list[Symbol]] = {}
         #
-        self.__result = []
-        self.counter = 0
+        self.__last_label: str = None
+        self.__true_leave = []
+        self.__false_leave = []
+        self.__condition_entry = []
+        self.__block_leave = []
+        #
+        self.__result: list[Sentence] = []
+        self.__reg_counter: int = 0
+        self.__label_counter: int = 0
 
-    def __accept(self, i: Node, node_type: NodeType) -> bool:
+    def analysis(self):
         """
+        main entry for analysis
 
-        :param i:
-        :param node_type:
         :return:
         """
-        if i.node_type is node_type:
-            return True
-        return False
+        if self.__ast.node_type != NodeType.ROOT:
+            self.__error(f"Excepted AST start with ROOT, Found {self.__ast.node_type.value}", 0)
+            sys.exit(9009)
+        program: list[Node] = self.__ast.info['program']
+        self.__curr_var_table = {}
+        # self.__curr_var_table.__hash__()
+        for i in program:
+            if i.node_type is NodeType.INT_VAR:
+                sent, symb = self.__a_define_var(i, True)
+                self.__insert_var_table(symb)
+                self.__result.append(sent)
+            elif i.node_type is NodeType.INT_ARRAY:
+                sent, symb = self.__a_define_array(i, True)
+                self.__insert_var_table(symb)
+                self.__result.append(sent)
+            elif i.node_type in (NodeType.INT_FUNC, NodeType.VOID_FUNC):
+                sent, symb = self.__a_define_function(i)
+        print(self.__variable_stack)
+        print(self.__curr_var_table)
+        print(self.__function_table)
+        for i in self.__result:
+            print(i)
 
     def __error(self, msg: str, lineno: int):
         """
@@ -139,7 +184,7 @@ class Analyzer:
         :param lineno:
         :return:
         """
-        print(f"[ERROR] [{lineno}]: {msg}\n")
+        print(f"[ERROR] [{lineno}]: {msg}")
 
     def __warn(self, msg: str, lineno: int):
         """
@@ -148,7 +193,7 @@ class Analyzer:
         :param lineno:
         :return:
         """
-        print(f"[WARN ] [{lineno}]: {msg}\n")
+        print(f"[WARN ] [{lineno}]: {msg}")
 
     def __info(self, msg: str, lineno: int):
         """
@@ -157,7 +202,37 @@ class Analyzer:
         :param lineno:
         :return:
         """
-        print(f"[INFO ] [{lineno}]: {msg}\n")
+        print(f"[INFO ] [{lineno}]: {msg}")
+
+    def __set_label(self, label_prefix: str = "L"):
+        """
+        
+
+        :param label_prefix:
+        :return:
+        """
+        self.__label_counter += 1
+        return f"{label_prefix}{self.__label_counter}"
+
+    def __set_reg(self, target_name: str, global_var: bool = False) -> str:
+        """
+        get a reg name, follow the format definition of LLVM
+
+        :param target_name: reg base name
+        :param global_var: is a global variable
+        :return: return a reg
+        """
+        check = self.__check_name(target_name)
+        if global_var:
+            if check < 0:
+                return f"{GLOBAL_VAR}{target_name}"
+            else:
+                return f"{GLOBAL_VAR}{target_name}{check}"
+        else:
+            if check < 0:
+                return f"{LOCAL_VAR}{target_name}"
+            else:
+                return f"{LOCAL_VAR}{target_name}{check}"
 
     def __check_name(self, name: str) -> int:
         """
@@ -169,94 +244,66 @@ class Analyzer:
         check = -1
         for i in self.__variable_stack:
             if name in i.keys():
-                check = self.counter
-                self.counter += 1
+                check = self.__reg_counter
+                self.__reg_counter += 1
                 return check
         return check
 
-    def __check_var_redefinition(self, i: Union[Node, Symbol]) -> bool:
+    def __check_var_redefinition(self, var: Union[Node, Symbol]) -> bool:
         """
         check if this variable has been already defined
 
-        :param i:
+        :param var:
         :return:
         """
-        if i.value in self.__curr_var_table.keys():
-            last = self.__curr_var_table.get(i.value)
-            self.__error(f"Redefinition of {i.value}, it was defined in line {last.lineno}", i.lineno)
+        if var.value in self.__curr_var_table.keys():
+            last = self.__curr_var_table.get(var.value)
+            self.__error(f"Redefinition of {var.value}, it was defined in line {last.lineno}", var.lineno)
             return False
         return True
 
-    def __check_func_redefinition(self, i: Union[Node, Symbol]) -> bool:
+    def __check_func_redefinition(self, func: Union[Node, Symbol]) -> bool:
         """
         check if this function has been already defined (only check name, does not contain parameters)
 
-        :param i:
+        :param func:
         :return:
         """
-        return i.value in self.__function_table.keys()
+        return func.value in self.__function_table.keys()
 
-    def __set_reg(self, i: str, global_var: bool = False) -> str:
-        """
-        get a reg name, follow the format definition of LLVM
-
-        :param i: reg base name
-        :param global_var: is a global variable
-        :return: return a reg
-        """
-        check = self.__check_name(i)
-        if global_var:
-            if check < 0:
-                return f"{GLOBAL_VAR}{i}"
-            else:
-                return f"{GLOBAL_VAR}{i}{check}"
-        else:
-            if check < 0:
-                return f"{LOCAL_VAR}{i}"
-            else:
-                return f"{LOCAL_VAR}{i}{check}"
-
-    def __insert_var_table(self, i: Symbol) -> bool:
+    def __insert_var_table(self, sym: Symbol) -> bool:
         """
         insert variable definition to current variable table, check redefinition
 
-        :param i:
+        :param sym:
         :return:
         """
-        self.__curr_var_table[i.value] = i
-        return self.__check_var_redefinition(i)
+        if self.__check_var_redefinition(sym):
+            self.__curr_var_table[sym.value] = sym
+            return False
+        return True
 
-    def __insert_func_table(self, i: Symbol) -> bool:
+    def __insert_func_table(self, sym: Symbol) -> bool:
         """
         insert function definition, check function overload and redefinition
 
-        :param i:
+        :param sym:
         :return:
         """
-        if self.__check_func_redefinition(i):
-            if isinstance(self.__function_table[i.value], list):
-                for j in self.__function_table[i.value]:
-                    j: Symbol
-                    if i.symbol_type == j.symbol_type and len(j.func_paras) == len(i.func_paras):
-                        flag = True
-                        for k in range(len(j.func_paras)):
-                            if j.func_paras[k]['type'] != i.func_paras[k]['type']:
-                                flag = False
-                                break
-                        if flag:
-                            self.__error(f"Redefine of function {i.value}, already defined in {j.lineno}", i.lineno)
-                            return False
-            else:
-                j: Symbol = self.__function_table[i.value]
-                if i.symbol_type == j.symbol_type and len(j.func_paras) == len(i.func_paras):
+        if self.__check_func_redefinition(sym):
+            # check is overload or total redefinition
+            for j in self.__function_table[sym.value]:
+                j: Symbol
+                if sym.symbol_type == j.symbol_type and len(j.func_paras) == len(sym.func_paras):
                     flag = True
                     for k in range(len(j.func_paras)):
-                        if j.func_paras[k]['type'] != i.func_paras[k]['type']:
+                        if j.func_paras[k]['type'] != sym.func_paras[k]['type']:
                             flag = False
                             break
                     if flag:
-                        self.__error(f"Redefine of function {i.value}, already defined in {j.lineno}", i.lineno)
+                        self.__error(f"Redefine of function {sym.value}, already defined in {j.lineno}", sym.lineno)
                         return False
+        self.__function_table[sym.value].append(sym)
         return True
 
     def __push_var_table(self):
@@ -278,71 +325,51 @@ class Analyzer:
             self.__curr_var_table = self.__variable_stack[-1]
             self.__variable_stack.pop()
 
-    def analysis(self):
-        """
-        main entry for analysis
-
-        :return:
-        """
-        if self.__ast.node_type != NodeType.ROOT:
-            self.__error(f"Excepted AST start with ROOT, Found {self.__ast.node_type.value}", 0)
-            sys.exit(9009)
-        program: list[Node] = self.__ast.info['program']
-        self.__curr_var_table = {}
-        self.__curr_var_table.__hash__()
-        for i in program:
-            if i.node_type is NodeType.INT_VAR:
-                sent, symb = self.__a_define_var(i, True)
-                self.__check_var_redefinition(symb)
-                self.__insert_var_table(symb)
-                self.__result.append(sent)
-            elif i.node_type is NodeType.INT_ARRAY:
-                sent, symb = self.__a_define_array(i, True)
-                self.__insert_var_table(symb)
-                self.__result.append(sent)
-            elif i.node_type is (NodeType.INT_FUNC, NodeType.VOID_FUNC):
-                sent, symb = self.__a_define_function(i)
-
-    def __a_define_var(self, i: Node, global_var: bool = False) -> tuple[Sentence, Symbol]:
+    def __a_define_var(self, var_node: Node, global_var: bool = False) -> tuple[Sentence, Symbol]:
         """
 
 
-        :param i:
+        :param var_node:
         :param global_var:
         :return:
         """
-        var = Sentence(sentence_type=Sentence_Type.DEFINE_VAR, value=i.value, lineno=i.lineno, label=i.node_id)
+        reg = self.__set_reg(var_node.value, global_var)
+        symbol = Symbol(value=var_node.value, symbol_type="int var", reg=reg, lineno=var_node.lineno)
+        var = Sentence(sentence_type=Sentence_Type.DEFINE_VAR, value=var_node.value, lineno=var_node.lineno, reg=reg)
         var.info = {
             "type": "int",
             "size": 32
         }
-        reg = self.__set_reg(i.value, global_var)
-        symbol = Symbol(value=i.value, symbol_type="int var", reg=reg, lineno=i.lineno)
         return var, symbol
 
-    def __a_define_array(self, i: Node, global_var: bool = False) -> tuple[Sentence, Symbol]:
+    def __a_define_array(self, array_node: Node, global_var: bool = False) -> tuple[Sentence, Symbol]:
         """
 
 
-        :param i:
+        :param array_node:
         :param global_var:
         :return:
         """
-        array = Sentence(sentence_type=Sentence_Type.DEFINE_ARRAY, value=i.value, lineno=i.lineno, label=i.node_id)
+        reg = self.__set_reg(array_node.value, global_var)
+        symbol = Symbol(value=array_node.value, symbol_type="int array", reg=reg, lineno=array_node.lineno)
+        array = Sentence(sentence_type=Sentence_Type.DEFINE_ARRAY, value=array_node.value, lineno=array_node.lineno,
+                         reg=reg)
         array.info = {
             "type": "int",
             "size": 32,
-            "dimension": i.info['size'],
+            "dimension": array_node.info['size'],
             "dimension_info": []
         }
-        for j in range(i.info['size']):
-            array.info['dimension_info'].append(i.info(str(j)).value)
-        reg = self.__set_reg(i.value, global_var)
-        symbol = Symbol(value=i.value, symbol_type="int array", reg=reg, size=array.info['dimension'],
-                        dimension=array.info['dimension_info'], lineno=i.lineno)
+        for j in range(array_node.info['size']):
+            if array_node.info[str(j)] is None:
+                array.info['dimension_info'].append(None)
+            else:
+                array.info['dimension_info'].append(array_node.info[str(j)].value)
+        symbol.size = array.info['dimension']
+        symbol.dimension = array.info['dimension_info']
         return array, symbol
 
-    def __a_define_function(self, i: Node) -> tuple[Sentence, Symbol]:
+    def __a_define_function(self, function: Node) -> tuple[Sentence, Symbol]:
         """
         Process definition of function. Be careful, this function will auto insert sentence and symbol to
         result and table. If this function can be defined, it will process function body automatically(If it has).
@@ -351,45 +378,106 @@ class Analyzer:
 
         DO NOT INSERT TO RESULT AND TABLE.
 
-        :param i: A function Node
+        :param function: A function Node
         :return:
         """
-        if i.node_type is NodeType.INT_FUNC:
+        if function.node_type is NodeType.INT_FUNC:
             func_type = "int"
         else:
             func_type = "void"
-        func = Sentence(sentence_type=Sentence_Type.DEFINE_FUNC, value=i.value, lineno=i.lineno)
+        func = Sentence(sentence_type=Sentence_Type.DEFINE_FUNC, value=function.value, lineno=function.lineno)
         func.info = {
             "type": func_type,
             "paras": []
         }
         func_paras = []
+        self.__push_var_table()
         # process parameters of function
-        for i in i.info['paras']:
-            if i.node_type is NodeType.INT_VAR:
-                sent, symb = self.__a_define_var(i, True)
+        for para in function.info['paras']:
+            if para.node_type is NodeType.INT_VAR:
+                sent, symb = self.__a_define_var(para, True)
                 self.__check_var_redefinition(symb)
                 self.__curr_var_table[symb.value] = symb
                 func.info['paras'].append(sent)
                 func_paras.append({
                     "type": "int var",
-                    "value": i.value
+                    "value": para.value
                 })
-            elif i.node_type is NodeType.INT_ARRAY:
-                sent, symb = self.__a_define_array(i, True)
+            elif para.node_type is NodeType.INT_ARRAY:
+                sent, symb = self.__a_define_array(para, True)
                 self.__check_var_redefinition(symb)
                 self.__curr_var_table[symb.value] = symb
                 func.info['paras'].append(sent)
                 func_paras.append({
                     "type": "int array",
-                    "value": i.value
+                    "value": para.value
                 })
-        # insert to result
         self.__result.append(func)
-        symb = Symbol(i.value, symbol_type="int func", reg="", lineno=i.lineno, func_paras=func_paras)
+
+        # generate symbol info
+        func_entry = self.__set_label()
+        func_leave = self.__set_label()
+        symb = Symbol(function.value, symbol_type="int func", lineno=function.lineno,
+                      func_paras=func_paras, func_entry=func_entry, func_leave=func_leave)
+        func.label = symb.func_entry
         if self.__insert_func_table(symb):  # if function has been defined successfully (include Overload)
-            self.__a_get_function_body(i.info['funcbody'])
+            func_sentences = self.__a_statement(function.info['funcbody'])
+            if not len(func_sentences):
+                self.__warn(f"Empty function {symb.value}", symb.lineno)
         return func, symb
 
-    def __a_get_function_body(self, i: Node) -> list[tuple[Sentence, Symbol]]:
+    def __a_statement(self, statement: Node) -> list[Sentence]:
+        if statement.node_type is not NodeType.BLOCK:
+            self.__error(f"Excepted function body Node's type is Block, Found {statement.node_type.name}",
+                         statement.lineno)
+        func_sents = []
+        for sub in statement.info['subprogram']:
+            sub: Node  # to
+            if sub.node_type is NodeType.INT_VAR:
+                sent, symb = self.__a_define_var(sub)
+                self.__insert_var_table(symb)
+                func_sents.append(sent)
+            elif sub.node_type is NodeType.INT_ARRAY:
+                sent, symb = self.__a_define_array(sub)
+                self.__insert_var_table(symb)
+                func_sents.append(sent)
+            elif sub.node_type is NodeType.WHILE:
+                pass
+
+            elif sub.node_type is NodeType.IF:
+                pass
+
+            elif sub.node_type is NodeType.IF:
+                pass
+
+        return []
+
+    def __a_while(self, while_node: Node):
+        self.__condition_entry.append(self.__set_label() if self.__last_label is None else self.__last_label)
+        self.__block_leave.append(self.__set_label())
+        self.__last_label = self.__block_leave[-1]
+
+        condition_sentences = self.__a_expr(while_node.info['condition'])
+        self.__push_var_table()
+        statement_sentences = self.__a_statement(while_node.info['statement'])
+        self.__pop_var_table()
+
+    def __a_expr(self, expr: Node) -> list[Sentence]:
         pass
+
+    def __a_logic_expr(self, logic_expr: Node) -> list[Sentence]:
+        pass
+
+    # TODO: TRY!
+    #       TO!
+    #       FIGURE!
+    #       OUT!
+    #       HOW!
+    #       TO!
+    #       PASS!
+    #       ALL!
+    #       JUMP!
+    #       LABEL!
+    #       CORRECTLY!
+    #       BEFORE!
+    #       15th Mar

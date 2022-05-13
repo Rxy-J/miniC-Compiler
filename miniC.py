@@ -10,8 +10,7 @@ import argparse
 import os
 import sys
 import json
-from collections import Generator, Iterator
-from types import Union
+# from types import Union
 
 from lex import Lex, Token
 from yacc import Yacc, CustomEncoder, Node
@@ -163,6 +162,8 @@ if __name__ == "__main__":
 
     # 语义分析
     curr_task = COMPILE_ACTION.ANALYZE
+    aa = Analyzer(yy.ast)
+    aa.analysis()
 
     # IR生成
     curr_task = COMPILE_ACTION.IR

@@ -10,6 +10,7 @@ int main() {
     int e;
     int f[5][10];
     while(a < 5) {
+        int t;
         if(a > 4) {
             break;
         } else if (b > 5){
@@ -18,5 +19,5 @@ int main() {
         }
         continue;
     }
-    return ++++++++1+++++++2+++++;
+    return 1;
 }

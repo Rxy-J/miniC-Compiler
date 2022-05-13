@@ -18,7 +18,7 @@ from lex import Token
 """
 这份代码如果不考虑生成gv图的部分还是可以接受的
 我的想法是写一个ast的解析器用于gv图的生成和后续语义分析
-我更想将当前gv图生成部分从其中分离出来
+我更想将当前gv图生成部分从其中分离出来（gv图生成已删除）
 """
 # TODO: 如上
 
@@ -169,6 +169,24 @@ node_type: ELSE
     info: {
         statement: Node() // else代码块
     }
+    
+node_type: ASSIGN | PLUS | MINUS | TIMES | DIVIDE | MOD | GT | GEQ | LT | LEQ | EQ | NEQ | LOGIC_AND | LOGIC_OR
+    info: {
+        lval:
+        rval:
+    }
+
+node_type: UNARY_LEFT
+    info: {
+        lop:
+        target:
+    }
+
+node_type: UNARY_RIGHT:
+    info: {
+        rop:
+        target:
+    }
 """
 
 
@@ -177,17 +195,16 @@ class Node:
     结点
     """
 
-    def __init__(self, n_type: NodeType, lineno: int, value: str = "", info=None, node_id: str = ""):
+    def __init__(self, n_type: NodeType, lineno: int, value: str = "", info=None):
         if info is None:
             info = {}
         self.node_type = n_type
         self.value = value
         self.info = info
         self.lineno = lineno
-        self.node_id = node_id
 
     def __repr__(self):
-        return f"node_type->{self.node_type}, value->{self.value}, lineno->{self.lineno}, info->{self.info}, node_id->{self.node_id}"
+        return f"node_type->{self.node_type}, value->{self.value}, lineno->{self.lineno}, info->{self.info}"
 
     def __json__(self):
         return {
@@ -195,16 +212,7 @@ class Node:
             "value": self.value,
             "lineno": self.lineno,
             "info": self.info,
-            "node_id": self.node_id
         }
-
-
-S = 0  # for Segment
-B = 0  # for Block
-L = 0  # for Local definition
-T = 0  # for Statement
-P = 0  # for Operator
-F = 0  # for Factor
 
 
 class Yacc:
@@ -216,7 +224,7 @@ class Yacc:
         self.__tokens = tokens
         self.__last_token = None
         self.__curr_token = None
-        self.ast = Node(NodeType.ROOT, lineno=0, node_id="ROOT")
+        self.ast = Node(NodeType.ROOT, lineno=0)
 
     def __next(self):
         self.__last_token, self.__curr_token = self.__curr_token, next(self.__tokens, None)
@@ -268,7 +276,6 @@ class Yacc:
         return y_segments
 
     def __y_segment(self) -> Union[list[Node], Node]:
-        global S
         """
         解析
 
@@ -289,7 +296,7 @@ class Yacc:
                 if i[0].node_type == NodeType.POINTER:
                     # pointer variable
                     if y_type.node_type == NodeType.INT:
-                        defvar = Node(NodeType.POINTER_INT_VAR, lineno=i[1].lineno, value=i[1].value, node_id=f"S{S}")
+                        defvar = Node(NodeType.POINTER_INT_VAR, lineno=i[1].lineno, value=i[1].value)
                         y_defvars.append(defvar)
                     else:
                         self.__error("VOID Can't be used for POINTER!")
@@ -297,17 +304,16 @@ class Yacc:
                     if y_type.node_type == NodeType.INT:
                         # variable or array
                         if len(i[1]):
-                            defvar = Node(NodeType.INT_ARRAY, lineno=i[0].lineno, value=i[0].value, node_id=f"S{S}")
+                            defvar = Node(NodeType.INT_ARRAY, lineno=i[0].lineno, value=i[0].value)
                             info = {"size": len(i[1])}
                             for j in range(info['size']):
                                 info[f'{j}'] = i[1][j]
                             defvar.info = info
                         else:
-                            defvar = Node(NodeType.INT_VAR, lineno=i[0].lineno, value=i[0].value, node_id=f"S{S}")
+                            defvar = Node(NodeType.INT_VAR, lineno=i[0].lineno, value=i[0].value)
                         y_defvars.append(defvar)
                     else:
                         self.__error("VOID Can't be used for VAR or ARRAY")
-                S += 1
             return y_defvars
 
     def __y_type(self) -> Node:
@@ -345,7 +351,6 @@ class Yacc:
             if type(y_idtail) == Node:
                 # for function
                 y_idtail.value = y_ident.value
-                y_idtail.node_id = y_ident.node_id
                 y_defvar = y_idtail
             else:
                 # for variable or array
@@ -428,7 +433,6 @@ class Yacc:
             return tmp
 
     def __y_functail(self) -> Union[Node, None]:
-        global B
         """
         解析函数体，函数体可能为空
 
@@ -437,8 +441,7 @@ class Yacc:
         if self.__accept('SEMICOLON'):
             return None
         elif self.__accept('LBRACKET'):
-            y_block = Node(NodeType.BLOCK, lineno=self.__last_token.line, node_id=f"B{B}")
-            B += 1
+            y_block = Node(NodeType.BLOCK, lineno=self.__last_token.line)
             y_subprogram = self.__y_subprogram()
             y_block.info["subprogram"] = y_subprogram
             self.__except('RBRACKET')
@@ -469,20 +472,20 @@ class Yacc:
         y_paradata = self.__y_paradata()
         if y_paradata[0].node_type == NodeType.POINTER:
             if y_type.node_type == NodeType.INT:
-                para = Node(NodeType.POINTER_INT_VAR, lineno=y_paradata[1].lineno, value=y_paradata[1].value, node_id=y_paradata[1].node_id)
+                para = Node(NodeType.POINTER_INT_VAR, lineno=y_paradata[1].lineno, value=y_paradata[1].value)
                 return para
             else:
                 self.__error("VOID Can't be used for POINTER!")
         else:
             if y_type.node_type == NodeType.INT:
                 if len(y_paradata[1]):
-                    para = Node(NodeType.INT_ARRAY, lineno=y_paradata[0].lineno, value=y_paradata[0].value, node_id=y_paradata[0].node_id)
+                    para = Node(NodeType.INT_ARRAY, lineno=y_paradata[0].lineno, value=y_paradata[0].value)
                     info = {"size": len(y_paradata[1])}
                     for i in range(info['size']):
                         info[f'{i}'] = y_paradata[1][i]
                     para.info = info
                 else:
-                    para = Node(NodeType.INT_VAR, lineno=y_paradata[0].lineno, value=y_paradata[0].value, node_id=y_paradata[0].node_id)
+                    para = Node(NodeType.INT_VAR, lineno=y_paradata[0].lineno, value=y_paradata[0].value)
                 return para
             else:
                 self.__error("VOID Can't be used for VAR or ARRAY")
@@ -542,7 +545,6 @@ class Yacc:
         return y_onestatements
 
     def __y_onestatement(self) -> Union[list[Node], Node, None]:
-        global L
         if self.__accept('INT') or self.__accept('VOID'):
             # for local variable definition
             y_localvars = []
@@ -556,22 +558,20 @@ class Yacc:
                 if i[0].node_type == NodeType.POINTER:
                     # for pointer local variable
                     if y_type.node_type == NodeType.INT:
-                        localvar = Node(NodeType.POINTER_INT_VAR, lineno=i[1].lineno, value=i[1].value, node_id=f"L{L}")
-                        L += 1
+                        localvar = Node(NodeType.POINTER_INT_VAR, lineno=i[1].lineno, value=i[1].value)
                         y_localvars.append(localvar)
                     else:
                         self.__error("VOID Can't be used for POINTER!")
                 else:
                     if y_type.node_type == NodeType.INT:
                         if len(i[1]):
-                            localvar = Node(NodeType.INT_ARRAY, lineno=i[0].lineno, value=i[0].value, node_id=f"L{L}")
+                            localvar = Node(NodeType.INT_ARRAY, lineno=i[0].lineno, value=i[0].value)
                             info = {'size': len(i[1])}
                             for j in range(info['size']):
                                 info[f'{j}'] = i[1][j]
                             localvar.info = info
                         else:
-                            localvar = Node(NodeType.INT_VAR, lineno=i[0].lineno, value=i[0].value, node_id=f"L{L}")
-                        L += 1
+                            localvar = Node(NodeType.INT_VAR, lineno=i[0].lineno, value=i[0].value)
                         y_localvars.append(localvar)
                     else:
                         self.__error("VOID Can't be used for VAR or ARRAY")
@@ -581,10 +581,8 @@ class Yacc:
             return y_statement
 
     def __y_statement(self) -> Optional[Node]:
-        global T, B
         if self.__accept('WHILE'):
-            y_while = Node(NodeType.WHILE, lineno=self.__last_token.line, value='WHILE', node_id=f"T{T}")
-            T += 1
+            y_while = Node(NodeType.WHILE, lineno=self.__last_token.line, value='WHILE')
             self.__except('LPAREN')
             y_expr = self.__y_expr()
             self.__except('RPAREN')
@@ -596,8 +594,7 @@ class Yacc:
             y_while.info = info
             return y_while
         elif self.__accept('IF'):
-            y_if = Node(NodeType.IF, lineno=self.__last_token.line, value='IF', node_id=f"T{T}")
-            T += 1
+            y_if = Node(NodeType.IF, lineno=self.__last_token.line, value='IF')
             self.__except('LPAREN')
             y_expr = self.__y_expr()
             self.__except('RPAREN')
@@ -611,26 +608,22 @@ class Yacc:
             y_if.info = info
             return y_if
         elif self.__accept('BREAK'):
-            y_break = Node(NodeType.BREAK, lineno=self.__last_token.line, value='break', node_id=f"T{T}")
-            T += 1
+            y_break = Node(NodeType.BREAK, lineno=self.__last_token.line, value='break')
             self.__except('SEMICOLON')
             return y_break
         elif self.__accept('CONTINUE'):
-            y_continue = Node(NodeType.CONTINUE, lineno=self.__last_token.line, value='continue', node_id=f"T{T}")
-            T += 1
+            y_continue = Node(NodeType.CONTINUE, lineno=self.__last_token.line, value='continue')
             self.__except('SEMICOLON')
             return y_continue
         elif self.__accept('RETURN'):
-            y_return = Node(NodeType.RETURN, lineno=self.__last_token.line, value='return', node_id=f"T{T}")
-            T += 1
+            y_return = Node(NodeType.RETURN, lineno=self.__last_token.line, value='return')
             if not self.__accept('SEMICOLON'):
                 y_expr = self.__y_expr()
                 y_return.info = {"return_expr": y_expr}
             self.__except('SEMICOLON')
             return y_return
         elif self.__accept('LBRACKET'):
-            y_block = Node(NodeType.BLOCK, lineno=self.__last_token.line, node_id=f"B{B}")
-            B += 1
+            y_block = Node(NodeType.BLOCK, lineno=self.__last_token.line)
             y_subprogram = self.__y_subprogram()
             y_block.info["subprogram"] = y_subprogram
             self.__except('RBRACKET')
@@ -642,10 +635,8 @@ class Yacc:
             return y_expr
 
     def __y_elsestat(self) -> Optional[Node]:
-        global T
         if self.__accept('ELSE'):
-            y_else = Node(NodeType.ELSE, lineno=self.__last_token.line, node_id=f"T{T}")
-            T += 1
+            y_else = Node(NodeType.ELSE, lineno=self.__last_token.line)
             y_statement = self.__y_statement()
             y_else.info['statement'] = y_statement
             return y_else
@@ -687,14 +678,12 @@ class Yacc:
             return y_andexpr
 
     def __y_asstail(self) -> Optional[Node]:
-        global P
         """
 
         :return:
         """
         if self.__accept('ASSIGN'):
-            y_assign = Node(NodeType.ASSIGN, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+            y_assign = Node(NodeType.ASSIGN, lineno=self.__last_token.line)
             y_assexpr = self.__y_assexpr()
             y_asstail = self.__y_asstail()
             if y_asstail is not None:
@@ -708,15 +697,13 @@ class Yacc:
             return None
 
     def __y_ortail(self) -> Optional[Node]:
-        global P
         """
 
 
         :return:
         """
         if self.__accept('LOGIC_OR'):
-            y_logic_or = Node(NodeType.LOGIC_OR, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+            y_logic_or = Node(NodeType.LOGIC_OR, lineno=self.__last_token.line)
             y_andexpr = self.__y_andexpr()
             y_ortail = self.__y_ortail()
             if y_ortail is not None:
@@ -743,15 +730,13 @@ class Yacc:
             return y_cmpexpr
 
     def __y_andtail(self) -> Optional[Node]:
-        global P
         """
 
 
         :return:
         """
         if self.__accept('LOGIC_AND'):
-            y_logic_and = Node(NodeType.LOGIC_AND, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+            y_logic_and = Node(NodeType.LOGIC_AND, lineno=self.__last_token.line)
             y_cmpexpr = self.__y_cmpexpr()
             y_andtail = self.__y_andtail()
             if y_andtail is not None:
@@ -779,7 +764,6 @@ class Yacc:
             return y_aloexpr
 
     def __y_cmptail(self) -> Optional[Node]:
-        global P
         """
 
 
@@ -799,8 +783,7 @@ class Yacc:
             else:
                 cmp = NodeType.NEQ
             self.__next()
-            y_cmps = Node(cmp, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
-            P += 1
+            y_cmps = Node(cmp, lineno=self.__last_token.line, value=self.__last_token.value)
             y_aloexpr = self.__y_aloexpr()
             y_cmptail = self.__y_cmptail()
             if y_cmptail is not None:
@@ -823,7 +806,6 @@ class Yacc:
             return y_item
 
     def __y_alotail(self) -> Optional[Node]:
-        global P
         """
 
 
@@ -831,10 +813,9 @@ class Yacc:
         """
         if self.__accept('PLUS') or self.__accept('MINUS'):
             if self.__last_token.type == 'PLUS':
-                y_addsub = Node(NodeType.PLUS, lineno=self.__last_token.line, node_id=f"P{P}")
+                y_addsub = Node(NodeType.PLUS, lineno=self.__last_token.line)
             else:
-                y_addsub = Node(NodeType.MINUS, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+                y_addsub = Node(NodeType.MINUS, lineno=self.__last_token.line)
             y_item = self.__y_item()
             y_alotail = self.__y_alotail()
             if y_alotail is not None:
@@ -862,7 +843,6 @@ class Yacc:
             return y_factor
 
     def __y_factor(self) -> Node:
-        global P
         """
 
 
@@ -882,10 +862,8 @@ class Yacc:
             else:
                 lop = NodeType.SELF_MINUS
             self.__next()
-            y_lop = Node(lop, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
-            P += 1
-            y_unary_left = Node(NodeType.UNARY_LEFT, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+            y_lop = Node(lop, lineno=self.__last_token.line, value=self.__last_token.value)
+            y_unary_left = Node(NodeType.UNARY_LEFT, lineno=self.__last_token.line)
             y_factor = self.__y_factor()
             y_unary_left.info['lop'] = y_lop
             y_unary_left.info['target'] = y_factor
@@ -895,7 +873,6 @@ class Yacc:
             return y_val
 
     def __y_itemtail(self) -> Optional[Node]:
-        global P
         """
 
 
@@ -903,12 +880,11 @@ class Yacc:
         """
         if self.__accept('TIMES') or self.__accept('DIVIDE') or self.__accept('MOD'):
             if self.__last_token.type == 'TIMES':
-                y_muldiv = Node(NodeType.TIMES, lineno=self.__last_token.line, node_id=f"P{P}")
+                y_muldiv = Node(NodeType.TIMES, lineno=self.__last_token.line)
             elif self.__last_token.type == 'DIVIDE':
-                y_muldiv = Node(NodeType.DIVIDE, lineno=self.__last_token.line, node_id=f"P{P}")
+                y_muldiv = Node(NodeType.DIVIDE, lineno=self.__last_token.line)
             else:
-                y_muldiv = Node(NodeType.MOD, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+                y_muldiv = Node(NodeType.MOD, lineno=self.__last_token.line)
             y_factor = self.__y_factor()
             y_itemtail = self.__y_itemtail()
             if y_itemtail is not None:
@@ -921,7 +897,6 @@ class Yacc:
             return None
 
     def __y_val(self) -> Node:
-        global P
         """
         解析运算元素是否存在右运算符
 
@@ -930,19 +905,16 @@ class Yacc:
         y_elem = self.__y_elem()
         while self.__accept('SELF_PLUS') or self.__accept('SELF_MINUS'):
             if self.__last_token.type == 'SELF_PLUS':
-                y_rop = Node(NodeType.SELF_PLUS, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
+                y_rop = Node(NodeType.SELF_PLUS, lineno=self.__last_token.line, value=self.__last_token.value)
             else:
-                y_rop = Node(NodeType.SELF_MINUS, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"P{P}")
-            P += 1
-            y_unary_right = Node(NodeType.UNARY_RIGHT, lineno=self.__last_token.line, node_id=f"P{P}")
-            P += 1
+                y_rop = Node(NodeType.SELF_MINUS, lineno=self.__last_token.line, value=self.__last_token.value)
+            y_unary_right = Node(NodeType.UNARY_RIGHT, lineno=self.__last_token.line)
             y_unary_right.info['rop'] = y_rop
             y_unary_right.info['target'] = y_elem
             y_elem = y_unary_right
         return y_elem
 
     def __y_elem(self) -> Node:
-        global F
         """
         解析单个运算元素
 
@@ -953,12 +925,10 @@ class Yacc:
             self.__except('RPAREN')
             return y_expr
         elif self.__accept('NUM'):
-            y_num = Node(NodeType.NUM, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
-            F += 1
+            y_num = Node(NodeType.NUM, lineno=self.__last_token.line, value=self.__last_token.value)
             return y_num
         elif self.__accept('IDENT'):
-            y_ident = Node(NodeType.IDENT, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
-            F += 1
+            y_ident = Node(NodeType.IDENT, lineno=self.__last_token.line, value=self.__last_token.value)
             graph_node_value = self.__last_token.value
             y_idexpr = self.__y_idexpr()
             if y_idexpr is not None:
@@ -1016,29 +986,25 @@ class Yacc:
         return y_args
 
     def __y_num(self) -> Node:
-        global F
         """
         期望解析数字，若当前不为数字则抛出错误
 
         :return:
         """
         if self.__accept('NUM'):
-            tmp = Node(NodeType.NUM, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
-            F += 1
+            tmp = Node(NodeType.NUM, lineno=self.__last_token.line, value=self.__last_token.value)
             return tmp
         else:
             self.__error(f"Excepted NUM, Found '{self.__curr_token.value}'")
 
     def __y_ident(self) -> Node:
-        global F
         """
         期望解析标识符，若当前不为标识符则抛出错误
 
         :return:
         """
         if self.__accept('IDENT'):
-            tmp = Node(NodeType.IDENT, lineno=self.__last_token.line, value=self.__last_token.value, node_id=f"F{F}")
-            F += 1
+            tmp = Node(NodeType.IDENT, lineno=self.__last_token.line, value=self.__last_token.value)
             return tmp
         else:
             self.__error(f"Excepted IDENT, Found '{self.__curr_token.value}'")
