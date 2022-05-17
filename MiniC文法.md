@@ -21,7 +21,6 @@ G[<program>]:
 <breakstat> → 'break' ';'
 <continuestat> → 'continue' ';'
 <returnstat> → 'return' <altexpr> ';'
-<assignstat> → <altexpr> ';'
 <blockstat> → '{' <subprogram> '}'
 <emptystat> → ';'
 <whilestat> → 'while' '(' <expr> ')' <statement>
@@ -35,6 +34,7 @@ G[<program>]:
     <blockstat> |
     <assignstat> |
     <emptystat>
+<assignstat> → <altexpr> ';'
 <altexpr> → <expr> | ε
 <expr> → <assexpr>
 <assexpr> → <orexpr> <asstail>

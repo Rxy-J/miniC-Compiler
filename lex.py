@@ -10,8 +10,9 @@
 import re
 import collections
 
+
 IDENT = r'(?P<IDENT>[a-zA-Z_][a-zA-Z0-9_]*)'
-NUM = r'(?P<NUM>\d+)'
+NUM = r'(?P<NUM>[1-9][0-9]*)'
 
 INT = r'(?P<INT>int)'
 VOID = r'(?P<VOID>void)'
