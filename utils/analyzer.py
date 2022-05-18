@@ -7,17 +7,15 @@
 @Date ：2022/5/9 14:30
 """
 
-import re
 import sys
-import os
-import hashlib
+import copy
 
 from enum import Enum
 from json import JSONEncoder
 from typing import Union, Any
-from graphviz import Digraph
 
-from yacc import Node, NodeType
+
+from utils.yacc import Node, NodeType
 
 
 class Sentence_Type(Enum):
@@ -48,15 +46,18 @@ class Sentence_Type(Enum):
     L_SELF_MINUS = 23
     R_SELF_MINUS = 24
     ZEXT = 25
-    # DONT_PARSER = 25
+    FUNC_END = 26
+    CALL = 27
+    RETURN = 28
 
 
 class Reg_Type:
     INT_REG = "int"
+    VOID_REG = "void"
     TMP_REG = "tmp_reg"
 
 
-class CustomJsonEncoder(JSONEncoder):
+class CustomAnaEncoder(JSONEncoder):
     """
     For Class Sentence and Class Symbol
     """
@@ -163,16 +164,19 @@ class Analyzer:
         self.__function_table: dict[str:list[Symbol]] = {}
         # jump control label
         self.__last_label: str = None
-        self.__true_leave: str = None
-        self.__false_leave: str = None
         self.__condition_entry: str = None
         self.__block_leave: str = None
+        self.__func_ret: str = None
+        self.__return_reg: dict = None
         #
         self.__result: list[Sentence] = []
         self.__reg_counter: int = 0
         self.__label_counter: int = 0
+        # create a stack change flow
+        self.__var_stack_flow = []
+        self.__fun_stack_flow = []
 
-    def analysis(self):
+    def analysis(self) -> list[Sentence]:
         """
         main entry for analysis
 
@@ -182,8 +186,7 @@ class Analyzer:
             self.__error(f"Excepted AST start with ROOT, Found {self.__ast.node_type.value}", 0)
             sys.exit(9009)
         program: list[Node] = self.__ast.info['program']
-        self.__curr_var_table = {}
-        # self.__curr_var_table.__hash__()
+        self.__variable_stack.append(self.__curr_var_table)
         for i in program:
             if i.node_type is NodeType.INT_VAR:
                 sent, symb = self.__a_define_var(i)
@@ -196,12 +199,11 @@ class Analyzer:
                 self.__insert_var_table(symb)
                 self.__result.append(sent)
             elif i.node_type in (NodeType.INT_FUNC, NodeType.VOID_FUNC):
-                sent, symb = self.__a_define_function(i)
-        print(self.__variable_stack)
-        print(self.__curr_var_table)
-        print(self.__function_table)
-        for i in self.__result:
-            print(i)
+                self.__a_define_function(i)
+        return self.__result
+
+    def get_stack_flow(self) -> tuple[list, list]:
+        return self.__var_stack_flow, self.__fun_stack_flow
 
     def __error(self, msg: str, lineno: int):
         """
@@ -260,7 +262,7 @@ class Analyzer:
         :param var_node:
         :return:
         """
-        var = self.__curr_var_table.get(var_node.value, None)
+        var = self.__curr_var_table.get(var_node.value)
         if var is None:
             for i in self.__variable_stack:
                 var = i.get(var_node.value, None)
@@ -269,6 +271,25 @@ class Analyzer:
         if var is None:
             self.__error(f"Undefined variable {var_node.value}", var_node.lineno)
         return var
+
+    def __find_func_define(self, func_name: str, args: list[dict], lineno: int = 0) -> Symbol:
+        funcs: list[Symbol] = self.__function_table.get(func_name)
+        if not funcs:
+            self.__error(f"Undefined function {func_name}", lineno)
+        else:
+            for i in funcs:
+                paras = i.func_paras
+                if len(paras) != len(args):
+                    continue
+                func_match = True
+                for j in range(len(paras)):
+                    if paras[j]['size'] != args[j]['size']:
+                        func_match = False
+                        break
+                if func_match:
+                    return i
+            self.__error(f"Can't find proper function call of {func_name}", lineno)
+        return None
 
     def __process_var_use(self, var_node: Node) -> dict:
         """
@@ -297,7 +318,7 @@ class Analyzer:
                     "size": 32,
                     "dimension": None,
                 }
-        else:
+        elif var_node.node_type is NodeType.ARRAY:
             sym = self.__find_var_define(var_node)
             if sym is None:
                 return error_var_dict
@@ -325,16 +346,40 @@ class Analyzer:
                     "size": 32,
                     "dimension": var_dimension
                 }
+        elif var_node.node_type is NodeType.FUNC:
+            args: list[Node] = var_node.info['args']
+            arg_res = []
+            for i in args:
+                arg_res.append(self.__a_expr(i))
+            func_sym = self.__find_func_define(var_node.value, arg_res, var_node.lineno)
+            if func_sym is None:
+                return error_var_dict
+            curr = Sentence(Sentence_Type.CALL, value="", lineno=var_node.lineno)
+            curr.info['func'] = func_sym.value
+            curr.info['args'] = arg_res
+            if "int" in func_sym.symbol_type:
+                tmp_reg = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 32
+                }
+                curr.info['aval'] = tmp_reg
+                curr.info['func_type'] = "int"
+            else:
+                tmp_reg = {
+                    "type": Reg_Type.VOID_REG,
+                    "reg": None,
+                    "size": None
+                }
+                curr.info['func_type'] = "void"
+            return tmp_reg
 
-    def __process_left_val(self, expr: Node) -> dict:
+    def __process_side_val(self, expr: Node) -> dict:
         if expr.node_type in (NodeType.NUM, NodeType.IDENT, NodeType.ARRAY):
-            return self.__process_var_use(expr)
-        else:
-            return self.__a_expr(expr)
-
-    def __process_right_val(self, expr: Node) -> dict:
-        if expr.node_type in (NodeType.NUM, NodeType.IDENT, NodeType.ARRAY):
-            return self.__process_var_use(expr)
+            res = self.__process_var_use(expr)
+            if res['type'] is Reg_Type.VOID_REG:
+                self.__error("Can't use VOID value in expression", expr.lineno)
+            return res
         else:
             return self.__a_expr(expr)
 
@@ -371,10 +416,13 @@ class Analyzer:
         return source_reg
 
     def __create_jump_sentences(self, reg: dict, true_label: str, false_label: str) -> None:
-        pass
+        curr = Sentence(Sentence_Type.IF_JMP, value="", lineno=0)
+        curr.info['var'] = reg
+        curr.info['tl'] = true_label
+        curr.info['fl'] = false_label
+        self.__result.append(curr)
 
     def __create_tmp_reg(self) -> str:
-        # FIXME: After finish learn LLVM Language Reference, Create Register
         reg = f"{self.__reg_counter}"
         self.__reg_counter += 1
         return reg
@@ -448,6 +496,7 @@ class Analyzer:
                     if flag:
                         self.__error(f"Redefine of function {sym.value}, already defined in {j.lineno}", sym.lineno)
                         return False
+            sym.value = sym.value + "i" * len(self.__function_table[sym.value])
         else:
             self.__function_table[sym.value] = []
         self.__function_table[sym.value].append(sym)
@@ -459,8 +508,14 @@ class Analyzer:
 
         :return: None
         """
-        self.__variable_stack.append(self.__curr_var_table)
+
+        curr_variable_stack = copy.deepcopy(self.__variable_stack)
+        curr_function_stack = copy.deepcopy(self.__function_table)
+        self.__var_stack_flow.append(curr_variable_stack)
+        self.__fun_stack_flow.append(curr_function_stack)
+
         self.__curr_var_table = {}
+        self.__variable_stack.append(self.__curr_var_table)
 
     def __pop_var_table(self):
         """
@@ -468,9 +523,13 @@ class Analyzer:
 
         :return: None
         """
+        curr_variable_stack = copy.deepcopy(self.__variable_stack)
+        curr_function_stack = copy.deepcopy(self.__function_table)
+        self.__var_stack_flow.append(curr_variable_stack)
+        self.__fun_stack_flow.append(curr_function_stack)
         if self.__variable_stack:
-            self.__curr_var_table = self.__variable_stack[-1]
             self.__variable_stack.pop()
+            self.__curr_var_table = self.__variable_stack[-1]
 
     def __a_define_var(self, var_node: Node) -> tuple[Sentence, Symbol]:
         """
@@ -481,7 +540,8 @@ class Analyzer:
         """
         reg = self.__set_reg(var_node.value)
         symbol = Symbol(value=var_node.value, symbol_type="int var", reg=reg, lineno=var_node.lineno)
-        var = Sentence(sentence_type=Sentence_Type.DEFINE_LOCAL_VAR, value=var_node.value, lineno=var_node.lineno, reg=reg)
+        var = Sentence(sentence_type=Sentence_Type.DEFINE_LOCAL_VAR, value=var_node.value, lineno=var_node.lineno,
+                       reg=reg)
         var.info = {
             "type": Reg_Type.INT_REG,
             "size": 32
@@ -498,7 +558,8 @@ class Analyzer:
         """
         reg = self.__set_reg(array_node.value)
         symbol = Symbol(value=array_node.value, symbol_type="int array", reg=reg, lineno=array_node.lineno)
-        array = Sentence(sentence_type=Sentence_Type.DEFINE_LOCAL_ARRAY, value=array_node.value, lineno=array_node.lineno,
+        array = Sentence(sentence_type=Sentence_Type.DEFINE_LOCAL_ARRAY, value=array_node.value,
+                         lineno=array_node.lineno,
                          reg=reg)
         array.info = {
             "type": Reg_Type.INT_REG,
@@ -545,36 +606,64 @@ class Analyzer:
             if para.node_type is NodeType.INT_VAR:
                 sent, symb = self.__a_define_var(para)
                 self.__check_var_redefinition(symb)
-                self.__curr_var_table[symb.value] = symb
+                self.__insert_var_table(symb)
                 func.info['paras'].append(sent)
                 func_paras.append({
                     "type": "int var",
-                    "value": para.value
+                    "value": para.value,
+                    "size": 32
                 })
             elif para.node_type is NodeType.INT_ARRAY:
                 sent, symb = self.__a_define_array(para)
                 self.__check_var_redefinition(symb)
-                self.__curr_var_table[symb.value] = symb
+                self.__insert_var_table(symb)
                 func.info['paras'].append(sent)
                 func_paras.append({
                     "type": "int array",
-                    "value": para.value
+                    "value": para.value,
+                    "size": 32,
+                    "dimension": symb.dimension
                 })
         self.__result.append(func)
 
         # generate symbol info
         func_entry = self.__set_label()
         func_leave = self.__set_label()
-        symb = Symbol(function.value, symbol_type="int func", lineno=function.lineno,
+        self.__func_ret = func_leave
+        symb = Symbol(function.value, symbol_type=f"{func_type} func", lineno=function.lineno,
                       func_paras=func_paras, func_entry=func_entry, func_leave=func_leave)
         func.label = symb.func_entry
         if self.__insert_func_table(symb):  # if function has been defined successfully (include Overload)
+            if func_type == "int":
+                ret_reg = self.__set_reg("retg")
+                self.__return_reg = {
+                    "type": Reg_Type.INT_REG,
+                    "reg": ret_reg,
+                    "size": 32
+                }
+                ret_sym = Symbol(symbol_type="int var", value="retg", reg=ret_reg)
+                ret_sen = Sentence(Sentence_Type.DEFINE_LOCAL_VAR, value="", lineno=0)
+                ret_sen.info = self.__return_reg
+                self.__insert_var_table(ret_sym)
+                self.__result.append(ret_sen)
+
             self.__last_label = func_entry
             self.__a_statement(function.info['funcbody'])
-            # if not len(func_sentences):
-            #     self.__warn(f"Empty function {symb.value}", symb.lineno)
+
+        # add ret instruction
+        curr = Sentence(Sentence_Type.RETURN, value="", lineno=function.lineno)
+        curr.label = self.__func_ret
+        if self.__return_reg:
+            curr.info['return_reg'] = self.__return_reg
+        else:
+            curr.info['return_reg'] = None
+        self.__result.append(curr)
 
         self.__pop_var_table()
+        self.__func_ret = None
+        self.__return_reg = None
+        func_end = Sentence(Sentence_Type.FUNC_END, value="", lineno=function.lineno)
+        self.__result.append(func_end)
         return func, symb
 
     def __a_statement(self, statement: Node) -> None:
@@ -593,43 +682,127 @@ class Analyzer:
                 self.__insert_var_table(symb)
                 self.__result.append(sent)
             elif sub.node_type is NodeType.WHILE:
-                pass
-
+                self.__a_while(sub)
             elif sub.node_type is NodeType.IF:
-                pass
-
+                self.__a_if(sub)
+            elif sub.node_type is NodeType.SWITCH:
+                self.__a_switch(sub)
+            elif sub.node_type in (NodeType.CONTINUE, NodeType.BREAK):
+                self.__a_continue_or_break(sub)
+            elif sub.node_type is NodeType.RETURN:
+                self.__a_return(sub)
+            elif sub.node_type is NodeType.BLOCK:
+                self.__push_var_table()
+                self.__a_statement(sub)
+                self.__pop_var_table()
             else:
                 self.__a_expr(sub)
 
-    def __a_while(self, while_node: Node) -> list[Sentence]:
+    def __a_while(self, while_node: Node) -> None:
         # follow this sequence to storage jump label info
-        old_label = (self.__condition_entry,
-                     self.__block_leave,
-                     self.__true_leave,
-                     self.__false_leave)
+        old_label = (self.__condition_entry, self.__block_leave)
         self.__condition_entry = self.__set_label() if self.__last_label is None else self.__last_label
         self.__block_leave = self.__set_label()
-        self.__true_leave = self.__set_label()
-        self.__false_leave = self.__block_leave
+        true_label = self.__set_label()
+        false_label = self.__block_leave
 
-        while_sentences: list[Sentence] = []
-
-        condition_sentences = self.__a_logic_expr(while_node.info['condition'])
+        self.__last_label = self.__condition_entry
+        condition_reg = self.__a_expr(while_node.info['condition'])
+        self.__create_jump_sentences(condition_reg, true_label, false_label)
         # given statement is a sub-block(node_type may not be BLOCK), we need to push stack
         self.__push_var_table()
-        statement_sentences = self.__a_statement(while_node.info['statement'])
+        self.__last_label = true_label
+        self.__a_statement(while_node.info['statement'])
         # after we left statement process, we need to restore all stack info
         self.__pop_var_table()
-
-        while_sentences.extend(condition_sentences)
-        while_sentences.extend(statement_sentences)
+        # add loop jump
+        curr = Sentence(Sentence_Type.JMP, value="", lineno=while_node.lineno)
+        if self.__last_label is not None:
+            curr.label = self.__last_label
+            self.__last_label = None
+        curr.info['label'] = self.__condition_entry
 
         # before leave loop block, should pass loop leave label to next sentence correctly
         self.__last_label = self.__block_leave
         # and then restore all jump control label
-        self.__condition_entry, self.__block_leave, self.__true_leave, self.__false_leave = old_label
+        self.__condition_entry, self.__block_leave = old_label
 
-        return while_sentences
+    def __a_if(self, if_node: Node) -> None:
+        condition_entry = self.__set_label() if self.__last_label is None else self.__last_label
+        block_leave = self.__set_label()
+        true_leave = self.__set_label()
+        false_leave = self.__set_label()
+
+        self.__last_label = condition_entry
+        condition_reg = self.__a_expr(if_node.info['condition'])
+        self.__create_jump_sentences(condition_reg, true_leave, false_leave)
+        # given statement is a sub-block(node_type may not be BLOCK), we need to push stack
+        self.__push_var_table()
+        self.__last_label = true_leave
+        self.__a_statement(if_node.info['statement'])
+        # after we left statement process, we need to restore all stack info
+        self.__pop_var_table()
+
+        self.__last_label = false_leave
+        if if_node.info['elsestat'] is not None:
+            self.__push_var_table()
+            self.__a_statement(if_node.info['elsestat'])
+            self.__pop_var_table()
+
+        # if exit labels have conflict, set a branch instruction jump to outer exit label
+        # FIXME:it will make system more complex
+        if self.__last_label is not None:
+            curr = Sentence(Sentence_Type.JMP, value="", lineno=if_node.lineno)
+            curr.label = self.__last_label
+            curr.info['label'] = block_leave
+            self.__last_label = None
+            self.__result.append(curr)
+
+        # before leave if block, should pass loop leave label to next sentence correctly
+        self.__last_label = block_leave
+
+    def __a_switch(self, switch_node: Node) -> None:
+        pass
+
+    def __a_continue_or_break(self, node: Node) -> None:
+        target_label = ""
+        if node.node_type is NodeType.CONTINUE:
+            if self.__condition_entry is None:
+                self.__error("Can't find loop block to set 'continue'", node.lineno)
+                return
+            target_label = self.__condition_entry
+        elif node.node_type is NodeType.BREAK:
+            if self.__condition_entry is None:
+                self.__error("Can't find loop block to set 'break'", node.lineno)
+                return
+            target_label = self.__block_leave
+
+        curr = Sentence(Sentence_Type.JMP, value="", lineno=node.lineno)
+        if self.__last_label:
+            curr.label = self.__last_label
+            self.__last_label = None
+        curr.info['label'] = target_label
+        self.__result.append(curr)
+
+    def __a_return(self, node: Node):
+        if self.__func_ret is None:
+            self.__error("Can't find function block to set 'return'", node.lineno)
+        if node.info.get('return_expr'):
+            if self.__return_reg is None:
+                self.__error("Return type 'void' can't have return value", node.lineno)
+                return
+            expr_res = self.__a_expr(node.info['return_expr'])
+            curr = Sentence(Sentence_Type.ASSIGN, value="", lineno=node.lineno)
+            curr.info['lvar'] = self.__return_reg
+            curr.info['avar'] = self.__return_reg
+            curr.info['rvar'] = expr_res
+            self.__result.append(curr)
+        curr = Sentence(Sentence_Type.JMP, value="", lineno=node.lineno)
+        if self.__last_label:
+            curr.label = self.__last_label
+            self.__last_label = None
+        curr.info['label'] = self.__func_ret
+        self.__result.append(curr)
 
     def __a_expr(self, expr: Node) -> dict:
         """
@@ -651,7 +824,7 @@ class Analyzer:
                 curr.info['lvar'] = {"type": None, "reg": None, "size": None}
 
             # right value
-            curr.info['rvar'] = self.__process_right_val(expr.info['rvar'])
+            curr.info['rvar'] = self.__process_side_val(expr.info['rvar'])
             if curr.info['rvar']['size'] != 32:
                 tmp = {
                     "type": Reg_Type.TMP_REG,
@@ -679,11 +852,14 @@ class Analyzer:
             }
             if target.node_type in (NodeType.IDENT, NodeType.ARRAY):
                 rvar = self.__process_var_use(target)
+            elif target.node_type in (NodeType.UNARY_LEFT, NodeType.UNARY_RIGHT):
+                rvar = self.__a_expr(target)
             else:
                 self.__error("lvalue required as decrement operand", expr.lineno)
                 return {
                     "type": None,
-                    "reg": None
+                    "reg": None,
+                    "size": None
                 }
             if lop.node_type in (NodeType.SELF_PLUS, NodeType.SELF_MINUS):
                 # t = a +/- 1
@@ -760,6 +936,8 @@ class Analyzer:
             }
             if target.node_type in (NodeType.IDENT, NodeType.ARRAY):
                 rvar = self.__process_var_use(target)
+            elif target.node_type in (NodeType.UNARY_LEFT, NodeType.UNARY_RIGHT):
+                rvar = self.__a_expr(target)
             else:
                 self.__error("lvalue required as decrement operand", expr.lineno)
                 return {
@@ -815,7 +993,7 @@ class Analyzer:
                 "size": 1
             }
 
-            l_reg = self.__process_left_val(expr.info['lvar'])
+            l_reg = self.__process_side_val(expr.info['lvar'])
             if l_reg['size'] != 1:
                 l_trans = self.__convert_i32_i1(and_res, l_reg, expr.lineno)
                 self.__result.append(l_trans)
@@ -824,7 +1002,7 @@ class Analyzer:
             self.__create_jump_sentences(and_res, l_true_label, all_leave_label)
 
             self.__last_label = l_true_label
-            r_reg = self.__process_right_val(expr.info['rvar'])
+            r_reg = self.__process_side_val(expr.info['rvar'])
             if r_reg['size'] != 1:
                 r_trans = self.__convert_i32_i1(and_res, r_reg, expr.lineno)
                 self.__result.append(r_trans)
@@ -843,7 +1021,7 @@ class Analyzer:
                 "size": 1
             }
 
-            l_reg = self.__process_left_val(expr.info['lvar'])
+            l_reg = self.__process_side_val(expr.info['lvar'])
             if l_reg['size'] != 1:
                 l_trans = self.__convert_i32_i1(or_res, l_reg, expr.lineno)
                 self.__result.append(l_trans)
@@ -852,7 +1030,7 @@ class Analyzer:
             self.__create_jump_sentences(or_res, all_leave_label, l_false_label)
 
             self.__last_label = l_false_label
-            r_reg = self.__process_right_val(expr.info['rvar'])
+            r_reg = self.__process_side_val(expr.info['rvar'])
             if r_reg['size'] != 1:
                 r_trans = self.__convert_i32_i1(or_res, r_reg, expr.lineno)
                 self.__result.append(r_trans)
@@ -893,10 +1071,10 @@ class Analyzer:
                 aval_reg_size = 1
             elif expr.node_type is NodeType.NOT:
                 curr = Sentence(Sentence_Type.NOT, value="", lineno=expr.lineno)
-            else:  # NUM, IDENT, ARRAY
+            else:  # NUM, IDENT, ARRAY, FUNC CALL
                 return self.__process_var_use(expr)
-            l_reg = self.__process_left_val(expr.info['lvar'])
-            r_reg = self.__process_right_val(expr.info['rvar'])
+            l_reg = self.__process_side_val(expr.info['lvar'])
+            r_reg = self.__process_side_val(expr.info['rvar'])
 
             curr.info['lvar'] = self.__convert_to_target_length(l_reg, 32, expr.lineno)
             curr.info['rvar'] = self.__convert_to_target_length(r_reg, 32, expr.lineno)
@@ -913,29 +1091,3 @@ class Analyzer:
                 self.__last_label = None
             self.__result.append(curr)
             return aval_reg_info
-
-    def __a_logic_expr(self, expr: Node, true_leave: str, false_leave: str) -> list[Sentence]:
-        """
-        it will get a series of sentences from Node:expr which will be processed
-        by __a_expr. it take the last sentence's result to make a logic judgement and jump action
-
-        this function can't be used to assignment expression. only for condition process
-
-        :param expr:
-        :return:
-        """
-
-        logic_sentences: list[Sentence] = []
-
-        main, before, after = self.__a_expr_t(expr)
-        i = Sentence(sentence_type=Sentence_Type.IF_JMP, value=true_leave, lineno=0)
-        j = Sentence(sentence_type=Sentence_Type.JMP, value=false_leave, lineno=0)
-
-        logic_sentences.extend(main)
-        logic_sentences.extend(before)
-        logic_sentences.extend(after)
-        logic_sentences.append(i)
-        logic_sentences.append(j)
-
-        return logic_sentences
-

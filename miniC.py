@@ -10,11 +10,13 @@ import argparse
 import os
 import sys
 import json
+import time
 # from types import Union
 
-from lex import Lex, Token
-from yacc import Yacc, CustomEncoder, Node
-from analyzer import Analyzer
+from utils.lex import Lex
+from utils.yacc import Yacc, CustomYaccEncoder, Node
+from utils.analyzer import Analyzer, CustomAnaEncoder
+from utils.gif import GifGenerator
 from enum import Enum
 
 EXEC_ = "minic.exe" if "win" in sys.platform else "minic"
@@ -145,25 +147,63 @@ if __name__ == "__main__":
     yy = Yacc(tokens)
     yy.parser()
     json_ast = {"root": yy.ast}  # 该AST原生格式为JSON格式
+    gv_ast = yy.graph.source
 
     # 如果目标任务为语法分析
     if curr_task.value >= task.value:
         # 输出格式为JSON
         if output_type == OUTPUT_TYPE.JSON:
-            jsonify_ast = json.dumps(json_ast, cls=CustomEncoder, indent=4)
+            jsonify_ast = json.dumps(json_ast, cls=CustomYaccEncoder, indent=4)
             if output_dest == OUTPUT_TARGET.STDOUT:
                 print(jsonify_ast)
             else:
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(jsonify_ast)
         else:
-            pass
+            if output_dest == OUTPUT_TARGET.STDOUT:
+                print(gv_ast)
+            else:
+                with open(output_file, "w", encoding="utf-8") as f:
+                    f.write(gv_ast)
         sys.exit(0)
 
     # 语义分析
     curr_task = COMPILE_ACTION.ANALYZE
     aa = Analyzer(yy.ast)
-    aa.analysis()
+    res = aa.analysis()
+    variable_stack_flow, function_stack_flow = aa.get_stack_flow()
+
+    json_VSF = {}
+    json_FSF = {}
+    for i in range(len(variable_stack_flow)):
+        json_VSF[i] = variable_stack_flow[i]
+    for i in range(len(function_stack_flow)):
+        json_FSF[i] = function_stack_flow[i]
+    json_SF = {
+        "VSF": json_VSF,
+        "FSF": json_FSF
+    }
+
+    if curr_task.value >= task.value:
+        # 输出格式为JSON
+        if output_type == OUTPUT_TYPE.JSON:
+            print("[WARN ] We don't recommend that try to print Symbol Stack Flow to screen")
+            jsonify_SF = json.dumps(json_SF, cls=CustomAnaEncoder, indent=4)
+            if output_dest == OUTPUT_TARGET.STDOUT:
+                print(jsonify_SF)
+            else:
+                with open(output_file, "w", encoding="utf-8") as f:
+                    f.write(jsonify_SF)
+        else:
+            if output_dest == OUTPUT_TARGET.STDOUT:
+                print("[ERROR] The Symbol Stack Flow can't be printed to screen without jsonify, please use set arg '-j' to implement jsonify")
+            else:
+                frames = []
+                for key, value in json_VSF.items():
+                    texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
+                    frames.append(GifGenerator.text2png(texts, 8, 15))
+                GifGenerator.png2gif(frames, "test.gif", 1.5)
+        sys.exit(0)
 
     # IR生成
     curr_task = COMPILE_ACTION.IR

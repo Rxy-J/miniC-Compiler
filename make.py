@@ -9,12 +9,14 @@
 
 import sys
 import subprocess
+import nuitka
+
 
 PY_MAIN_SCRIPT = ["miniC.py"]
 EXEC_FILE = "minic.exe" if "win" in sys.platform else "minic"
 DIST_PATH = "./"
 EXEC_TYPE = "-F"  # F for single file, D for a folder which contains all files
-PC = "pyinstaller"
+PC = "nuitka"
 CFLAGS = [EXEC_TYPE, "--distpath", DIST_PATH,  "-n", EXEC_FILE]
 
 command = [PC]
