@@ -814,6 +814,8 @@ class Yacc:
             else:
                 ort, loi = y_ortail
                 loi.info['lvar'] = y_andexpr
+                # for graphviz
+                self.graph.edge(loi.graph_node, y_andexpr.graph_node)
                 return ort
         else:
             return y_andexpr
@@ -865,6 +867,9 @@ class Yacc:
                     if y_ortail.node_type is NodeType.LOGIC_OR:
                         y_logic_or.info['rvar'] = y_andexpr
                         y_ortail.info['lvar'] = y_logic_or
+                        # for graphviz
+                        self.graph.edge(y_ortail.graph_node, y_logic_or.graph_node)
+                        self.graph.edge(y_logic_or.graph_node, y_andexpr.graph_node)
                         return y_ortail, y_logic_or
                     else:
                         y_ortail.info['lvar'] = y_andexpr
@@ -877,6 +882,9 @@ class Yacc:
                     ort, loi = y_ortail
                     y_logic_or.info['rvar'] = y_andexpr
                     loi.info['lvar'] = y_logic_or
+                    # for graphviz
+                    self.graph.edge(loi.graph_node, y_logic_or.graph_node)
+                    self.graph.edge(y_logic_or.graph_node, y_andexpr.graph_node)
                     return ort, y_logic_or
             else:
                 y_logic_or.info['rvar'] = y_andexpr
@@ -902,6 +910,8 @@ class Yacc:
             else:
                 ant, lai = y_andtail
                 lai.info['lvar'] = y_cmpexpr
+                # for graphviz
+                self.graph.edge(lai.graph_node, y_cmpexpr.graph_node)
                 return ant
         else:
             return y_cmpexpr
@@ -925,6 +935,9 @@ class Yacc:
                     if y_andtail.node_type is NodeType.LOGIC_AND:
                         y_logic_and.info['rvar'] = y_cmpexpr
                         y_andtail.info['lvar'] = y_logic_and
+                        # for graphviz
+                        self.graph.edge(y_andtail.graph_node, y_logic_and.graph_node)
+                        self.graph.edge(y_logic_and.graph_node, y_cmpexpr.graph_node)
                         return y_andtail, y_logic_and
                     else:
                         y_andtail.info['lvar'] = y_cmpexpr
@@ -937,6 +950,9 @@ class Yacc:
                     ant, lai = y_andtail
                     y_logic_and.info['rvar'] = y_cmpexpr
                     lai.info['lvar'] = y_logic_and
+                    # for graphviz
+                    self.graph.edge(lai.graph_node, y_logic_and.graph_node)
+                    self.graph.edge(y_logic_and.graph_node, y_cmpexpr.graph_node)
                     return ant, y_logic_and
             else:
                 y_logic_and.info['rvar'] = y_cmpexpr
@@ -1016,6 +1032,8 @@ class Yacc:
             else:
                 alo, absb = y_alotail
                 absb.info['lvar'] = y_item
+                # for graphviz
+                self.graph.edge(absb.graph_node, y_item.graph_node)
                 return alo
         else:
             return y_item
@@ -1042,6 +1060,9 @@ class Yacc:
                     if y_alotail.node_type in [NodeType.PLUS, NodeType.MINUS]:
                         y_addsub.info['rvar'] = y_item
                         y_alotail.info['lvar'] = y_addsub
+                        # for graphviz
+                        self.graph.edge(y_alotail.graph_node, y_addsub.graph_node)
+                        self.graph.edge(y_addsub.graph_node, y_item.graph_node)
                         return y_alotail, y_addsub
                     else:
                         y_alotail.info['lvar'] = y_item
@@ -1054,6 +1075,9 @@ class Yacc:
                     alo, adsb = y_alotail
                     y_addsub.info['rvar'] = y_item
                     adsb.info['lvar'] = y_addsub
+                    # for graphviz
+                    self.graph.edge(adsb.graph_node, y_addsub.graph_node)
+                    self.graph.edge(y_addsub.graph_node, y_item.graph_node)
                     return alo, y_addsub
             else:
                 y_addsub.info['rvar'] = y_item
@@ -1080,6 +1104,8 @@ class Yacc:
             else:
                 ite, mldv = y_itemtail
                 mldv.info['lvar'] = y_factor
+                # for graphviz
+                self.graph.edge(mldv.graph_node, y_factor.graph_node)
                 return ite
         else:
             return y_factor
@@ -1146,6 +1172,9 @@ class Yacc:
                     if y_itemtail.node_type in [NodeType.TIMES, NodeType.DIVIDE, NodeType.MOD]:
                         y_muldiv.info['rvar'] = y_factor
                         y_itemtail.info['lvar'] = y_muldiv
+                        # for graphviz
+                        self.graph.edge(y_itemtail.graph_node, y_muldiv.graph_node)
+                        self.graph.edge(y_muldiv.graph_node, y_factor.graph_node)
                         return y_itemtail, y_muldiv
                     else:
                         y_itemtail.info['lvar'] = y_factor
@@ -1158,6 +1187,9 @@ class Yacc:
                     ite, mldv = y_itemtail
                     y_muldiv.info['rvar'] = y_factor
                     mldv.info['lvar'] = y_muldiv
+                    # for graphviz
+                    self.graph.edge(mldv.graph_node, y_muldiv.graph_node)
+                    self.graph.edge(y_muldiv.graph_node, y_factor.graph_node)
                     return ite, y_muldiv
             else:
                 y_muldiv.info['rvar'] = y_factor
