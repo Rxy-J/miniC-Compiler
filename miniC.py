@@ -10,17 +10,17 @@ import argparse
 import os
 import sys
 import json
-import time
-# from types import Union
 
 from utils.lex import Lex
 from utils.yacc import Yacc, CustomYaccEncoder, Node
 from utils.analyzer import Analyzer, CustomAnaEncoder
-from utils.gif import GifGenerator
+from utils.ir import IRGenerator, LLVM
+# from utils.gif import GifGenerator
 from enum import Enum
 
 EXEC_ = "minic.exe" if "win" in sys.platform else "minic"
-DESC = "A miniC Compiler. if not set argument '-o', it will print the result of compiler to screen"
+DESC_ENG = "A miniC Compiler. if not set argument '-o', it will print the result of compiler to screen"
+DESC_CHS = "Mini C 编译器，如果不设置参数'-o'，其过程结果将会被输出至屏幕/命令行"
 VERSION = 1.0
 
 
@@ -45,8 +45,8 @@ class COMPILE_ACTION(Enum):
     NONE = 0
     LEX = 1
     YACC = 2
-    IR = 3
-    ANALYZE = 4
+    ANALYZE = 3
+    IR = 4
     ALL = 5
     COMPLEX = 6
 
@@ -64,19 +64,21 @@ def get_info_from_json(json_data: dict):
 
 if __name__ == "__main__":
     # 预设参数解析
-    argsParser = argparse.ArgumentParser(EXEC_, description=DESC)
+    argsParser = argparse.ArgumentParser(EXEC_, description=DESC_CHS)
     argsParser.add_argument("input", nargs="?", type=str, default=None, metavar="input")
     argsParser.add_argument("-l", "--lex", action="store_true", default=False, dest="lex", help="词法处理")
     argsParser.add_argument("-y", "--yacc", action="store_true", default=False, dest="yacc", help="语法处理")
     argsParser.add_argument("-a", "--analyze", action="store_true", default=False, dest="analyze", help="语义处理")
     argsParser.add_argument("-i", "--ir", action="store_true", default=False, dest="ir", help="IR生成")
     argsParser.add_argument("-j", "--json", action="store_true", default=False, dest="json", help="输出为json格式")
+    argsParser.add_argument("--duration", type=int, default=1.5, dest="duration", help="符号栈流输出GIF图每帧持续时间")
     argsParser.add_argument("-o", nargs="?", default=None, type=str, dest="output", help="输出文件")
     argsParser.add_argument("-v", "--version", action="version", version=f"v{VERSION}", help="版本信息")
     opts = argsParser.parse_args()
 
     input_file = opts.input
     output_file = opts.output
+    gif_duration = opts.duration
 
     # 输入文件名判断
     if input_file is None:
@@ -173,6 +175,12 @@ if __name__ == "__main__":
     res = aa.analysis()
     variable_stack_flow, function_stack_flow = aa.get_stack_flow()
 
+    if aa.error:
+        sys.exit(88)
+
+    with open("res.json", "w", encoding="utf-8") as f:
+        json.dump({"res": res}, f, indent=4, cls=CustomAnaEncoder)
+
     json_VSF = {}
     json_FSF = {}
     for i in range(len(variable_stack_flow)):
@@ -187,23 +195,44 @@ if __name__ == "__main__":
     if curr_task.value >= task.value:
         # 输出格式为JSON
         if output_type == OUTPUT_TYPE.JSON:
-            print("[WARN ] We don't recommend that try to print Symbol Stack Flow to screen")
             jsonify_SF = json.dumps(json_SF, cls=CustomAnaEncoder, indent=4)
             if output_dest == OUTPUT_TARGET.STDOUT:
+                print("[WARN ] We don't recommend that try to print Symbol Stack Flow to screen")
                 print(jsonify_SF)
             else:
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(jsonify_SF)
-        else:
-            if output_dest == OUTPUT_TARGET.STDOUT:
-                print("[ERROR] The Symbol Stack Flow can't be printed to screen without jsonify, please use set arg '-j' to implement jsonify")
-            else:
-                frames = []
-                for key, value in json_VSF.items():
-                    texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
-                    frames.append(GifGenerator.text2png(texts, 8, 15))
-                GifGenerator.png2gif(frames, "test.gif", 1.5)
+        # else:
+        #     if output_dest == OUTPUT_TARGET.STDOUT:
+        #         print("[ERROR] The Symbol Stack Flow can't be printed to screen without jsonify, please use set arg '-j' to implement jsonify")
+        #     else:
+        #         frames = []
+        #         for key, value in json_VSF.items():
+        #             texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
+        #             frames.append(GifGenerator.text2png(texts, 8, 15))
+        #         GifGenerator.png2gif(frames, "VSF.gif", duration=gif_duration)
+        #         frames = []
+        #         for key, value in json_FSF.items():
+        #             texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
+        #             frames.append(GifGenerator.text2png(texts, 8, 15))
+        #         GifGenerator.png2gif(frames, "FSF.gif", duration=gif_duration)
         sys.exit(0)
-
     # IR生成
     curr_task = COMPILE_ACTION.IR
+    ii = IRGenerator(res, ir=LLVM)
+    ir = ii.get_ir()
+
+    if ii.ir.error:
+        sys.exit(99)
+
+    if output_type == OUTPUT_TYPE.JSON:
+        print("[ERROR] IR can't be transformed to json")
+    else:
+        if output_dest == OUTPUT_TARGET.STDOUT:
+            for i in ir:
+                print(i)
+        else:
+            with open(output_file, "w", encoding="utf-8") as f:
+                for i in ir:
+                    f.write(f"{i}\n")
+    sys.exit(0)

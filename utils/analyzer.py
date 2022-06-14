@@ -12,15 +12,17 @@ import copy
 
 from enum import Enum
 from json import JSONEncoder
-from typing import Union, Any
-
+from typing import Union, Any, Optional
 
 from utils.yacc import Node, NodeType
 
+GLOBAL = "@"
+OTHER = "%"
+
 
 class Sentence_Type(Enum):
-    DEFINE_GLOBAL_VAR = 0
-    DEFINE_LOCAL_VAR = 1
+    DEFINE_GLOBAL_VAR = -1
+    DEFINE_LOCAL_VAR = 0
     DEFINE_GLOBAL_ARRAY = 1
     DEFINE_LOCAL_ARRAY = 2
     DEFINE_FUNC = 3
@@ -40,15 +42,14 @@ class Sentence_Type(Enum):
     LT = 17
     LEQ = 18
     NOT = 19
-    NEGATIVE = 20
-    L_SELF_PLUS = 21
-    R_SELF_PLUS = 22
-    L_SELF_MINUS = 23
-    R_SELF_MINUS = 24
     ZEXT = 25
     FUNC_END = 26
     CALL = 27
     RETURN = 28
+    XOR = 29
+    GETPTR = 30
+    LOAD = 31
+    PHI = 32
 
 
 class Reg_Type:
@@ -77,24 +78,24 @@ class Sentence:
 
     def __init__(self,
                  sentence_type: Sentence_Type,
-                 value: str,
                  lineno: int,
+                 value: str = "",
                  label: str = None,
                  reg: str = None,
                  info: dict = None):
         if info is None:
             info = {}
         self.sentence_type = sentence_type
-        self.value = value
         self.lineno = lineno
+        self.value = value
         self.label = label
         self.reg = reg
         self.info = info
 
     def __repr__(self) -> str:
         return f"sentence_type->{self.sentence_type.name}, " \
-               f"value->{self.value}, " \
                f"lineno->{self.lineno}, " \
+               f"value->{self.value}, " \
                f"label->{self.label}, " \
                f"reg->{self.reg}, " \
                f"info->{self.info}"
@@ -102,8 +103,8 @@ class Sentence:
     def __json__(self) -> dict:
         return {
             "sentence_type": self.sentence_type.name,
-            "value": self.value,
             "lineno": self.lineno,
+            "value": self.value,
             "label": self.label,
             "reg": self.reg,
             "info": self.info
@@ -119,6 +120,7 @@ class Symbol:
                  dimension: list = None,
                  lineno: int = 0,
                  init_value: str = None,
+                 def_from: str = "define",
                  func_paras: list = None,
                  func_entry: str = None,
                  func_leave: str = None):
@@ -129,13 +131,17 @@ class Symbol:
         self.dimension = dimension
         self.lineno = lineno
         self.init_value = init_value
+        self.def_from = def_from
         self.func_paras = func_paras
         self.func_entry = func_entry
         self.func_leave = func_leave
 
     def __repr__(self):
         return f"value->{self.value}, " \
-               f"symbol_type->{self.symbol_type}"
+               f"symbol_type->{self.symbol_type}, " \
+               f"reg -> {self.reg}, " \
+               f"size -> {self.size}, " \
+               f"func_paras -> {self.func_paras}, "
 
     def __json__(self):
         return {
@@ -146,6 +152,21 @@ class Symbol:
             "dimension": self.dimension,
             "init_value": self.init_value
         }
+
+
+PRE_DEFINE_FUNC = {
+    "getint": [Symbol("getint", symbol_type='int func', func_paras=[])],
+    "getch": [Symbol('getch', symbol_type='int func', func_paras=[])],
+    "getarray": [Symbol('getarray', symbol_type='int func',
+                       func_paras=[{'type': 'int array', 'value': 'a', 'size': 32, 'dimension': [None]}])],
+    "putint": [Symbol('putint', symbol_type='void func',
+                     func_paras=[{'type': 'int var', 'value': 'k', 'size': 32}])],
+    "putch": [Symbol('putch', symbol_type='void func',
+                    func_paras=[{'type': 'int var', 'value': 'c', 'size': 32}])],
+    "putarray": [Symbol('putarray', symbol_type='void func',
+                       func_paras=[{'type': 'int var', 'value': 'n', 'size': 32},
+                                   {'type': 'int array', 'value': 'd', 'size': 32, 'dimension': [None]}])],
+}
 
 
 class Analyzer:
@@ -162,6 +183,7 @@ class Analyzer:
         self.__curr_var_table: dict[str:Symbol] = {}
         # key is function name and value is a dict that contains return type, parameters and entry label
         self.__function_table: dict[str:list[Symbol]] = {}
+        self.__function_table.update(PRE_DEFINE_FUNC)
         # jump control label
         self.__last_label: str = None
         self.__condition_entry: str = None
@@ -175,6 +197,7 @@ class Analyzer:
         # create a stack change flow
         self.__var_stack_flow = []
         self.__fun_stack_flow = []
+        self.error = False
 
     def analysis(self) -> list[Sentence]:
         """
@@ -190,11 +213,15 @@ class Analyzer:
         for i in program:
             if i.node_type is NodeType.INT_VAR:
                 sent, symb = self.__a_define_var(i)
+                sent.info['reg'] = sent.info['reg'].replace("%", "@")
+                symb.reg = sent.info['reg']
                 sent.sentence_type = Sentence_Type.DEFINE_GLOBAL_VAR
                 self.__insert_var_table(symb)
                 self.__result.append(sent)
             elif i.node_type is NodeType.INT_ARRAY:
                 sent, symb = self.__a_define_array(i)
+                sent.info['reg'] = sent.info['reg'].replace("%", "@")
+                symb.reg = sent.info['reg']
                 sent.sentence_type = Sentence_Type.DEFINE_GLOBAL_ARRAY
                 self.__insert_var_table(symb)
                 self.__result.append(sent)
@@ -212,7 +239,8 @@ class Analyzer:
         :param lineno:
         :return:
         """
-        print(f"[ERROR] [{lineno}]: {msg}")
+        print(f"[ERROR] [ANALYZER] [{lineno}]: {msg}")
+        self.error = True
 
     def __warn(self, msg: str, lineno: int):
         """
@@ -242,7 +270,7 @@ class Analyzer:
         self.__label_counter += 1
         return f"{label_prefix}{self.__label_counter}"
 
-    def __set_reg(self, target_name: str) -> str:
+    def __set_reg(self, target_name: str, is_global: bool = False) -> str:
         """
         get a reg name, follow the format definition of LLVM
 
@@ -250,10 +278,12 @@ class Analyzer:
         :return: return a reg
         """
         check = self.__check_name(target_name)
+        prefix = OTHER if not is_global else GLOBAL
+        prefix += "aa"
         if check < 0:
-            return f"{target_name}"
+            return f"{prefix}{target_name}"
         else:
-            return f"{target_name}{check}"
+            return f"{prefix}{target_name}{check}"
 
     def __find_var_define(self, var_node: Node) -> Symbol:
         """
@@ -272,10 +302,11 @@ class Analyzer:
             self.__error(f"Undefined variable {var_node.value}", var_node.lineno)
         return var
 
-    def __find_func_define(self, func_name: str, args: list[dict], lineno: int = 0) -> Symbol:
+    def __find_func_define(self, func_name: str, args: list[dict], lineno: int = 0, declare: bool = False) -> Optional[Symbol]:
         funcs: list[Symbol] = self.__function_table.get(func_name)
         if not funcs:
-            self.__error(f"Undefined function {func_name}", lineno)
+            if not declare:
+                self.__error(f"Undefined function {func_name}", lineno)
         else:
             for i in funcs:
                 paras = i.func_paras
@@ -287,11 +318,14 @@ class Analyzer:
                         func_match = False
                         break
                 if func_match:
+                    if declare and i.def_from != "declare":
+                        self.__error(f"Function {func_name} has already been defined!", lineno)
                     return i
-            self.__error(f"Can't find proper function call of {func_name}", lineno)
+            if not declare:
+                self.__error(f"Can't find proper function call of {func_name}", lineno)
         return None
 
-    def __process_var_use(self, var_node: Node) -> dict:
+    def __process_var_use(self, var_node: Node, just_value: bool = True) -> dict:
         """
 
         :param var_node:
@@ -300,6 +334,7 @@ class Analyzer:
         error_var_dict = {
             "type": None,
             "reg": None,
+            "size": -1,
         }
         if var_node.node_type is NodeType.NUM:
             return {
@@ -312,12 +347,36 @@ class Analyzer:
             if sym is None:
                 return error_var_dict
             else:
-                return {
+                if not just_value:
+                    return {
+                        "type": "ident",
+                        "reg": sym.reg,
+                        "size": 32,
+                        "dimension": None,
+                        "define_dime": sym.dimension
+                    }
+                pass_reg = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 32,
+                    "dimension": None,
+                    "define_dime": sym.dimension
+                }
+                curr = Sentence(Sentence_Type.LOAD, lineno=var_node.lineno)
+                curr.info['avar'] = pass_reg
+                curr.info['lvar'] = pass_reg
+                curr.info['rvar'] = {
                     "type": "ident",
                     "reg": sym.reg,
                     "size": 32,
                     "dimension": None,
+                    "define_dime": sym.dimension
                 }
+                if self.__last_label:
+                    curr.label = self.__last_label
+                    self.__last_label = None
+                self.__result.append(curr)
+                return pass_reg
         elif var_node.node_type is NodeType.ARRAY:
             sym = self.__find_var_define(var_node)
             if sym is None:
@@ -327,34 +386,45 @@ class Analyzer:
                 return error_var_dict
             else:
                 var_dimension = [var_node.info[str(i)] for i in range(var_node.info['size'])]
-                define_dimension = sym.dimension
-                if len(var_dimension) > len(define_dimension):
-                    self.__error(
-                        f"The dimension of {sym.value} is {len(define_dimension)}, but try to use {len(var_dimension)} dimensions",
-                        var_node.lineno)
-                    return error_var_dict
-                else:
-                    for i in range(len(var_dimension)):
-                        if not (var_dimension[i] < define_dimension[i]):
-                            self.__error(
-                                f"The size of {sym.value} in dimension {i} is {define_dimension[i]}, but try to use {var_dimension[i]}",
-                                var_node.lineno)
-                            return error_var_dict
+                dimensions = []
+                for i in var_dimension:
+                    if i.node_type is NodeType.NUM:
+                        dimensions.append({
+                            "type": "num",
+                            "value": int(i.value),
+                            "size": 32
+                        })
+                    elif i.node_type is NodeType.IDENT:
+                        dimensions.append(self.__process_var_use(i))
+                    else:
+                        dimensions.append(self.__a_expr(i))
                 return {
                     "type": "ident",
                     "reg": sym.reg,
                     "size": 32,
-                    "dimension": var_dimension
+                    "dimension": dimensions,
+                    "define_dime": sym.dimension
                 }
         elif var_node.node_type is NodeType.FUNC:
             args: list[Node] = var_node.info['args']
             arg_res = []
             for i in args:
+                if i.node_type is NodeType.IDENT:
+                    sym = self.__find_var_define(i)
+                    if sym and sym.dimension:
+                        arg_res.append({
+                            "type": "ident",
+                            "reg": sym.reg,
+                            "size": 32,
+                            "dimension": None,
+                            "define_dime": sym.dimension
+                        })
+                        continue
                 arg_res.append(self.__a_expr(i))
             func_sym = self.__find_func_define(var_node.value, arg_res, var_node.lineno)
             if func_sym is None:
                 return error_var_dict
-            curr = Sentence(Sentence_Type.CALL, value="", lineno=var_node.lineno)
+            curr = Sentence(Sentence_Type.CALL, value=func_sym.value, lineno=var_node.lineno)
             curr.info['func'] = func_sym.value
             curr.info['args'] = arg_res
             if "int" in func_sym.symbol_type:
@@ -363,7 +433,7 @@ class Analyzer:
                     "reg": self.__create_tmp_reg(),
                     "size": 32
                 }
-                curr.info['aval'] = tmp_reg
+                curr.info['avar'] = tmp_reg
                 curr.info['func_type'] = "int"
             else:
                 tmp_reg = {
@@ -372,6 +442,8 @@ class Analyzer:
                     "size": None
                 }
                 curr.info['func_type'] = "void"
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
             return tmp_reg
 
     def __process_side_val(self, expr: Node) -> dict:
@@ -384,7 +456,7 @@ class Analyzer:
             return self.__a_expr(expr)
 
     def __convert_i32_i1(self, target_reg: dict, source_reg: dict, lineno: int = 0) -> Sentence:
-        trans = Sentence(sentence_type=Sentence_Type.NEQ, value="", lineno=lineno)
+        trans = Sentence(sentence_type=Sentence_Type.NEQ, lineno=lineno)
         trans.info['lvar'] = source_reg
         trans.info['rvar'] = {
             "type": "num",
@@ -392,12 +464,19 @@ class Analyzer:
             "size": 32
         }
         trans.info['avar'] = target_reg
+        if self.__last_label:
+            trans.label = self.__last_label
+            self.__last_label = None
         return trans
 
     def __convert_i1_i32(self, target_reg: dict, source_reg: dict, lineno: int = 0) -> Sentence:
-        trans = Sentence(sentence_type=Sentence_Type.ZEXT, value="", lineno=lineno)
-        trans.info['lvar'] = source_reg
+        trans = Sentence(sentence_type=Sentence_Type.ZEXT, lineno=lineno)
+        trans.info['lvar'] = target_reg
+        trans.info['rvar'] = source_reg
         trans.info['avar'] = target_reg
+        if self.__last_label:
+            trans.label = self.__last_label
+            self.__last_label = None
         return trans
 
     def __convert_to_target_length(self, source_reg: dict, target_length: int, lineno: int = 0) -> dict:
@@ -416,14 +495,23 @@ class Analyzer:
         return source_reg
 
     def __create_jump_sentences(self, reg: dict, true_label: str, false_label: str) -> None:
-        curr = Sentence(Sentence_Type.IF_JMP, value="", lineno=0)
+        if reg['size'] != 1:
+            tmp = {
+                "type": Reg_Type.TMP_REG,
+                "reg": self.__create_tmp_reg(),
+                "size": 1,
+            }
+            self.__result.append(self.__convert_i32_i1(tmp, reg))
+            reg = tmp
+        curr = Sentence(Sentence_Type.IF_JMP, lineno=0)
         curr.info['var'] = reg
         curr.info['tl'] = true_label
         curr.info['fl'] = false_label
+        self.__set_label_and_keep_base_block(curr)
         self.__result.append(curr)
 
     def __create_tmp_reg(self) -> str:
-        reg = f"{self.__reg_counter}"
+        reg = f"{OTHER}t{self.__reg_counter}"
         self.__reg_counter += 1
         return reg
 
@@ -531,6 +619,15 @@ class Analyzer:
             self.__variable_stack.pop()
             self.__curr_var_table = self.__variable_stack[-1]
 
+    def __set_label_and_keep_base_block(self, curr: Sentence):
+        if self.__last_label:
+            curr.label = self.__last_label
+            self.__last_label = None
+            if self.__result[-1].sentence_type not in [Sentence_Type.JMP, Sentence_Type.IF_JMP]:
+                bb = Sentence(Sentence_Type.JMP, lineno=0)
+                bb.info['label'] = curr.label
+                self.__result.append(bb)
+
     def __a_define_var(self, var_node: Node) -> tuple[Sentence, Symbol]:
         """
 
@@ -544,6 +641,7 @@ class Analyzer:
                        reg=reg)
         var.info = {
             "type": Reg_Type.INT_REG,
+            "reg": reg,
             "size": 32
         }
         return var, symbol
@@ -553,27 +651,28 @@ class Analyzer:
 
 
         :param array_node:
-        :param global_var:
         :return:
         """
         reg = self.__set_reg(array_node.value)
         symbol = Symbol(value=array_node.value, symbol_type="int array", reg=reg, lineno=array_node.lineno)
-        array = Sentence(sentence_type=Sentence_Type.DEFINE_LOCAL_ARRAY, value=array_node.value,
+        array = Sentence(sentence_type=Sentence_Type.DEFINE_LOCAL_ARRAY,
+                         value=array_node.value,
                          lineno=array_node.lineno,
                          reg=reg)
         array.info = {
             "type": Reg_Type.INT_REG,
+            "reg": reg,
             "size": 32,
             "dimension": array_node.info['size'],
-            "dimension_info": []
+            "define_dime": []
         }
         for j in range(array_node.info['size']):
             if array_node.info[str(j)] is None:
-                array.info['dimension_info'].append(None)
+                array.info['define_dime'].append(None)
             else:
-                array.info['dimension_info'].append(array_node.info[str(j)].value)
+                array.info['define_dime'].append(int(array_node.info[str(j)].value))
         symbol.size = array.info['dimension']
-        symbol.dimension = array.info['dimension_info']
+        symbol.dimension = array.info['define_dime']
         return array, symbol
 
     def __a_define_function(self, function: Node) -> tuple[Sentence, Symbol]:
@@ -600,14 +699,27 @@ class Analyzer:
             "paras": []
         }
         func_paras = []
-
+        func_paras_def = []
         # process parameters of function
         for para in function.info['paras']:
             if para.node_type is NodeType.INT_VAR:
                 sent, symb = self.__a_define_var(para)
-                self.__check_var_redefinition(symb)
-                self.__insert_var_table(symb)
                 func.info['paras'].append(sent)
+                ins_reg = self.__create_tmp_reg()
+                ins_info = {
+                    'type': sent.info.get('type'),
+                    'reg': ins_reg,
+                    'size': sent.info.get('size'),
+                }
+                curr = Sentence(Sentence_Type.DEFINE_LOCAL_VAR, lineno=0)
+                curr.info = ins_info
+                func_paras_def.append(curr)
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+                curr.info['rvar'] = sent.info
+                curr.info['avar'] = ins_info
+                func_paras_def.append(curr)
+                symb.reg = ins_reg
+                self.__insert_var_table(symb)
                 func_paras.append({
                     "type": "int var",
                     "value": para.value,
@@ -615,25 +727,61 @@ class Analyzer:
                 })
             elif para.node_type is NodeType.INT_ARRAY:
                 sent, symb = self.__a_define_array(para)
-                self.__check_var_redefinition(symb)
-                self.__insert_var_table(symb)
                 func.info['paras'].append(sent)
+                ins_reg = self.__create_tmp_reg()
+                ins_info = {
+                    'type': sent.info.get('type'),
+                    'reg': ins_reg,
+                    'size': sent.info.get('size'),
+                    'dimension': sent.info.get('dimension'),
+                    'define_dime': sent.info.get('define_dime'),
+                }
+                curr = Sentence(Sentence_Type.DEFINE_LOCAL_ARRAY, lineno=0)
+                curr.info = ins_info
+                func_paras_def.append(curr)
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+                curr.info['rvar'] = sent.info
+                curr.info['avar'] = ins_info
+                func_paras_def.append(curr)
+                symb.reg = ins_reg
+                self.__insert_var_table(symb)
                 func_paras.append({
                     "type": "int array",
                     "value": para.value,
                     "size": 32,
                     "dimension": symb.dimension
                 })
-        self.__result.append(func)
 
         # generate symbol info
         func_entry = self.__set_label()
         func_leave = self.__set_label()
         self.__func_ret = func_leave
-        symb = Symbol(function.value, symbol_type=f"{func_type} func", lineno=function.lineno,
-                      func_paras=func_paras, func_entry=func_entry, func_leave=func_leave)
-        func.label = symb.func_entry
-        if self.__insert_func_table(symb):  # if function has been defined successfully (include Overload)
+        symb = Symbol(function.value,
+                      symbol_type=f"{func_type} func",
+                      lineno=function.lineno,
+                      func_paras=func_paras,
+                      func_entry=func_entry,
+                      func_leave=func_leave)
+        if function.info['funcbody'] is None:
+            symb.def_from = "declare"
+            self.__pop_var_table()
+            if self.__insert_func_table(symb):
+                return func, symb
+        else:
+            symb_dec = self.__find_func_define(symb.value, symb.func_paras, declare=True)
+            if symb_dec:
+                symb = symb_dec
+                func_entry = symb.func_entry
+                func_leave = symb.func_leave
+
+                func.label = func_entry
+                self.__func_ret = func_leave
+            else:
+                self.__insert_func_table(symb)
+
+            func.value = symb.value
+            self.__result.append(func)
+            self.__result.extend(func_paras_def)
             if func_type == "int":
                 ret_reg = self.__set_reg("retg")
                 self.__return_reg = {
@@ -642,61 +790,81 @@ class Analyzer:
                     "size": 32
                 }
                 ret_sym = Symbol(symbol_type="int var", value="retg", reg=ret_reg)
-                ret_sen = Sentence(Sentence_Type.DEFINE_LOCAL_VAR, value="", lineno=0)
+                ret_sen = Sentence(Sentence_Type.DEFINE_LOCAL_VAR, value="retg", lineno=0)
                 ret_sen.info = self.__return_reg
                 self.__insert_var_table(ret_sym)
                 self.__result.append(ret_sen)
 
-            self.__last_label = func_entry
+            # self.__last_label = func_entry
             self.__a_statement(function.info['funcbody'])
 
-        # add ret instruction
-        curr = Sentence(Sentence_Type.RETURN, value="", lineno=function.lineno)
-        curr.label = self.__func_ret
-        if self.__return_reg:
-            curr.info['return_reg'] = self.__return_reg
-        else:
-            curr.info['return_reg'] = None
-        self.__result.append(curr)
+            if self.__last_label:
+                curr = Sentence(Sentence_Type.JMP, lineno=function.lineno)
+                curr.label = self.__last_label
+                self.__last_label = None
+                curr.info['label'] = self.__func_ret
+                self.__result.append(curr)
+
+            self.__last_label = self.__func_ret
+            # add ret instruction
+            if self.__return_reg:
+                curr = Sentence(Sentence_Type.LOAD, lineno=function.lineno)
+                ret_t = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 32
+                }
+                curr.info['lvar'] = ret_t
+                curr.info['rvar'] = self.__return_reg
+                curr.info['avar'] = ret_t
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
+            else:
+                ret_t = self.__return_reg
+            curr = Sentence(Sentence_Type.RETURN, lineno=function.lineno)
+            curr.info['return_reg'] = ret_t
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
+
+            func_end = Sentence(Sentence_Type.FUNC_END, lineno=function.lineno)
+            self.__result.append(func_end)
 
         self.__pop_var_table()
         self.__func_ret = None
         self.__return_reg = None
-        func_end = Sentence(Sentence_Type.FUNC_END, value="", lineno=function.lineno)
-        self.__result.append(func_end)
+
         return func, symb
 
     def __a_statement(self, statement: Node) -> None:
-        if statement.node_type is not NodeType.BLOCK:
-            self.__error(f"Excepted function body Node's type is Block, Found {statement.node_type.name}",
-                         statement.lineno)
-
-        for sub in statement.info['subprogram']:
-            sub: Node  # to
-            if sub.node_type is NodeType.INT_VAR:
-                sent, symb = self.__a_define_var(sub)
-                self.__insert_var_table(symb)
-                self.__result.append(sent)
-            elif sub.node_type is NodeType.INT_ARRAY:
-                sent, symb = self.__a_define_array(sub)
-                self.__insert_var_table(symb)
-                self.__result.append(sent)
-            elif sub.node_type is NodeType.WHILE:
-                self.__a_while(sub)
-            elif sub.node_type is NodeType.IF:
-                self.__a_if(sub)
-            elif sub.node_type is NodeType.SWITCH:
-                self.__a_switch(sub)
-            elif sub.node_type in (NodeType.CONTINUE, NodeType.BREAK):
-                self.__a_continue_or_break(sub)
-            elif sub.node_type is NodeType.RETURN:
-                self.__a_return(sub)
-            elif sub.node_type is NodeType.BLOCK:
-                self.__push_var_table()
+        if statement.node_type is NodeType.BLOCK:
+            for sub in statement.info['subprogram']:
                 self.__a_statement(sub)
-                self.__pop_var_table()
-            else:
-                self.__a_expr(sub)
+        elif statement.node_type is NodeType.INT_VAR:
+            sent, symb = self.__a_define_var(statement)
+            self.__set_label_and_keep_base_block(sent)
+            self.__insert_var_table(symb)
+            self.__result.append(sent)
+        elif statement.node_type is NodeType.INT_ARRAY:
+            sent, symb = self.__a_define_array(statement)
+            self.__set_label_and_keep_base_block(sent)
+            self.__insert_var_table(symb)
+            self.__result.append(sent)
+        elif statement.node_type is NodeType.WHILE:
+            self.__a_while(statement)
+        elif statement.node_type is NodeType.IF:
+            self.__a_if(statement)
+        elif statement.node_type is NodeType.SWITCH:
+            self.__a_switch(statement)
+        elif statement.node_type in (NodeType.CONTINUE, NodeType.BREAK):
+            self.__a_continue_or_break(statement)
+        elif statement.node_type is NodeType.RETURN:
+            self.__a_return(statement)
+        elif statement.node_type is NodeType.BLOCK:
+            self.__push_var_table()
+            self.__a_statement(statement)
+            self.__pop_var_table()
+        else:
+            self.__a_expr(statement)
 
     def __a_while(self, while_node: Node) -> None:
         # follow this sequence to storage jump label info
@@ -705,6 +873,12 @@ class Analyzer:
         self.__block_leave = self.__set_label()
         true_label = self.__set_label()
         false_label = self.__block_leave
+
+        # add branch for base block
+        if self.__result[-1].sentence_type not in [Sentence_Type.JMP, Sentence_Type.IF_JMP]:
+            curr = Sentence(Sentence_Type.JMP, lineno=0)
+            curr.info['label'] = self.__condition_entry
+            self.__result.append(curr)
 
         self.__last_label = self.__condition_entry
         condition_reg = self.__a_expr(while_node.info['condition'])
@@ -716,11 +890,12 @@ class Analyzer:
         # after we left statement process, we need to restore all stack info
         self.__pop_var_table()
         # add loop jump
-        curr = Sentence(Sentence_Type.JMP, value="", lineno=while_node.lineno)
+        curr = Sentence(Sentence_Type.JMP, lineno=while_node.lineno)
         if self.__last_label is not None:
             curr.label = self.__last_label
             self.__last_label = None
         curr.info['label'] = self.__condition_entry
+        self.__result.append(curr)
 
         # before leave loop block, should pass loop leave label to next sentence correctly
         self.__last_label = self.__block_leave
@@ -733,6 +908,12 @@ class Analyzer:
         true_leave = self.__set_label()
         false_leave = self.__set_label()
 
+        # add branch for base block
+        if self.__result[-1].sentence_type not in [Sentence_Type.JMP, Sentence_Type.IF_JMP]:
+            curr = Sentence(Sentence_Type.JMP, lineno=0)
+            curr.info['label'] = condition_entry
+            self.__result.append(curr)
+
         self.__last_label = condition_entry
         condition_reg = self.__a_expr(if_node.info['condition'])
         self.__create_jump_sentences(condition_reg, true_leave, false_leave)
@@ -743,20 +924,27 @@ class Analyzer:
         # after we left statement process, we need to restore all stack info
         self.__pop_var_table()
 
+        curr = Sentence(Sentence_Type.JMP, lineno=if_node.lineno)
+        if self.__last_label is not None:
+            curr.label = self.__last_label
+            self.__last_label = None
+        curr.info['label'] = block_leave
+        self.__result.append(curr)
+
         self.__last_label = false_leave
         if if_node.info['elsestat'] is not None:
             self.__push_var_table()
-            self.__a_statement(if_node.info['elsestat'])
+            self.__a_statement(if_node.info['elsestat'].info['statement'])
             self.__pop_var_table()
 
         # if exit labels have conflict, set a branch instruction jump to outer exit label
         # FIXME:it will make system more complex
+        curr = Sentence(Sentence_Type.JMP, lineno=if_node.lineno)
         if self.__last_label is not None:
-            curr = Sentence(Sentence_Type.JMP, value="", lineno=if_node.lineno)
             curr.label = self.__last_label
-            curr.info['label'] = block_leave
             self.__last_label = None
-            self.__result.append(curr)
+        curr.info['label'] = block_leave
+        self.__result.append(curr)
 
         # before leave if block, should pass loop leave label to next sentence correctly
         self.__last_label = block_leave
@@ -777,7 +965,7 @@ class Analyzer:
                 return
             target_label = self.__block_leave
 
-        curr = Sentence(Sentence_Type.JMP, value="", lineno=node.lineno)
+        curr = Sentence(Sentence_Type.JMP, lineno=node.lineno)
         if self.__last_label:
             curr.label = self.__last_label
             self.__last_label = None
@@ -792,12 +980,15 @@ class Analyzer:
                 self.__error("Return type 'void' can't have return value", node.lineno)
                 return
             expr_res = self.__a_expr(node.info['return_expr'])
-            curr = Sentence(Sentence_Type.ASSIGN, value="", lineno=node.lineno)
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=node.lineno)
             curr.info['lvar'] = self.__return_reg
             curr.info['avar'] = self.__return_reg
             curr.info['rvar'] = expr_res
+            if self.__last_label:
+                curr.label = self.__last_label
+                self.__last_label = None
             self.__result.append(curr)
-        curr = Sentence(Sentence_Type.JMP, value="", lineno=node.lineno)
+        curr = Sentence(Sentence_Type.JMP, lineno=node.lineno)
         if self.__last_label:
             curr.label = self.__last_label
             self.__last_label = None
@@ -812,13 +1003,13 @@ class Analyzer:
         :return:
         """
         if expr.node_type is NodeType.ASSIGN:
-            curr = Sentence(Sentence_Type.ASSIGN, value="", lineno=expr.lineno)
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=expr.lineno)
             # left value
             if expr.info['lvar'].node_type is NodeType.NUM:
                 self.__error("Number can't be evaluated", expr.lineno)
                 curr.info['lvar'] = {"type": None, "reg": None, "size": None}
             elif expr.info['lvar'].node_type in (NodeType.IDENT, NodeType.ARRAY):
-                curr.info['lvar'] = self.__process_var_use(expr.info['lvar'])
+                curr.info['lvar'] = self.__process_var_use(expr.info['lvar'], False)
             else:
                 self.__error("Excepted left identifier of '='", expr.lineno)
                 curr.info['lvar'] = {"type": None, "reg": None, "size": None}
@@ -850,28 +1041,35 @@ class Analyzer:
                 "reg": value_pass_reg,
                 "size": 32
             }
-            if target.node_type in (NodeType.IDENT, NodeType.ARRAY):
-                rvar = self.__process_var_use(target)
-            elif target.node_type in (NodeType.UNARY_LEFT, NodeType.UNARY_RIGHT):
+            if target.node_type in (NodeType.NUM, NodeType.IDENT, NodeType.ARRAY):
+                rvar = self.__process_var_use(target, False)
+            else:  # target.node_type in (NodeType.UNARY_LEFT, NodeType.UNARY_RIGHT):
                 rvar = self.__a_expr(target)
-            else:
-                self.__error("lvalue required as decrement operand", expr.lineno)
-                return {
-                    "type": None,
-                    "reg": None,
-                    "size": None
-                }
+            value_pass['size'] = rvar['size']
             if lop.node_type in (NodeType.SELF_PLUS, NodeType.SELF_MINUS):
-                # t = a +/- 1
-                if lop.node_type is NodeType.SELF_PLUS:
-                    curr = Sentence(Sentence_Type.ADD, value="", lineno=expr.lineno)
-                else:
-                    curr = Sentence(Sentence_Type.MINUS, value="", lineno=expr.lineno)
+                # t = a
+                curr = Sentence(Sentence_Type.LOAD, lineno=expr.lineno)
+                curr.info['avar'] = value_pass
+                curr.info['lvar'] = value_pass
+                curr.info['rvar'] = rvar
                 if self.__last_label:
                     curr.label = self.__last_label
                     self.__last_label = None
-                curr.info['avar'] = value_pass
-                curr.info['lvar'] = rvar
+                self.__result.append(curr)
+
+                # t = a +/- 1
+                tmp_reg = self.__create_tmp_reg()
+                tmp_info = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": tmp_reg,
+                    "size": 32
+                }
+                if lop.node_type is NodeType.SELF_PLUS:
+                    curr = Sentence(Sentence_Type.ADD, lineno=expr.lineno)
+                else:
+                    curr = Sentence(Sentence_Type.MINUS, lineno=expr.lineno)
+                curr.info['avar'] = tmp_info
+                curr.info['lvar'] = value_pass
                 curr.info['rvar'] = {
                     "type": "num",
                     "value": "1",
@@ -880,50 +1078,72 @@ class Analyzer:
                 self.__result.append(curr)
 
                 # a = t
-                curr = Sentence(Sentence_Type.ASSIGN, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=expr.lineno)
                 curr.info['avar'] = rvar
                 curr.info['lvar'] = rvar
-                curr.info['rvar'] = value_pass
+                curr.info['rvar'] = tmp_info
                 self.__result.append(curr)
+                value_pass = tmp_info
             else:
+                if rvar.get('reg') and rvar.get("type") is not Reg_Type.TMP_REG:
+                    curr = Sentence(Sentence_Type.LOAD, lineno=expr.lineno)
+                    curr.info['avar'] = value_pass
+                    curr.info['lvar'] = value_pass
+                    curr.info['rvar'] = rvar
+                    self.__set_label_and_keep_base_block(curr)
+                    self.__result.append(curr)
+                else:
+                    value_pass = rvar
                 if lop.node_type is NodeType.NEGATIVE:
                     # t = 0 - a
-                    curr = Sentence(Sentence_Type.MINUS, value="", lineno=expr.lineno)
-                    curr.info['avar'] = value_pass
+                    curr = Sentence(Sentence_Type.MINUS, lineno=expr.lineno)
+                    curr.info['avar'] = {
+                        "type": Reg_Type.TMP_REG,
+                        "reg": self.__create_tmp_reg(),
+                        "size": rvar['size']
+                    }
                     curr.info['lvar'] = {
                         "type": "num",
                         "value": "0",
-                        "size": 32
+                        "size": rvar['size']
                     }
-                    curr.info['rvar'] = rvar
+                    curr.info['rvar'] = value_pass
+                    self.__set_label_and_keep_base_block(curr)
                     self.__result.append(curr)
+                    value_pass = curr.info['avar']
                 else:
                     # t1 = a != 0
-                    tmp_info = {
+                    neq = Sentence(Sentence_Type.NEQ, lineno=expr.lineno)
+                    neq.info['avar'] = {
                         "type": Reg_Type.TMP_REG,
                         "reg": self.__create_tmp_reg(),
                         "size": 1
                     }
-                    curr = Sentence(Sentence_Type.NEQ, value="", lineno=expr.lineno)
-                    curr.info['avar'] = tmp_info
-                    curr.info['lvar'] = rvar
-                    curr.info['rvar'] = {
+                    neq.info['lvar'] = value_pass
+                    neq.info['rvar'] = {
                         "type": "num",
                         "value": "0",
                         "size": 32
                     }
-                    self.__result.append(curr)
+                    self.__set_label_and_keep_base_block(neq)
+                    self.__result.append(neq)
+
                     # t2 = t1 xor true
-                    curr = Sentence(Sentence_Type.XOR, value="", lineno=expr.lineno)
-                    curr.info['avar'] = value_pass
-                    curr.info['lvar'] = tmp_info
+                    curr = Sentence(Sentence_Type.XOR, lineno=expr.lineno)
+                    curr.info['avar'] = {
+                        "type": Reg_Type.TMP_REG,
+                        "reg": self.__create_tmp_reg(),
+                        "size": 1
+                    }
+                    curr.info['lvar'] = neq.info['avar']
                     curr.info['rvar'] = {
                         "type": "num",
                         "value": "1",
                         "size": 1
                     }
-                    value_pass['size'] = 1
+                    self.__set_label_and_keep_base_block(curr)
                     self.__result.append(curr)
+                    value_pass = curr.info['avar']
             return value_pass
         elif expr.node_type is NodeType.UNARY_RIGHT:  # ++, --
             target: Node = expr.info['target']
@@ -935,7 +1155,7 @@ class Analyzer:
                 "size": 32
             }
             if target.node_type in (NodeType.IDENT, NodeType.ARRAY):
-                rvar = self.__process_var_use(target)
+                rvar = self.__process_var_use(target, False)
             elif target.node_type in (NodeType.UNARY_LEFT, NodeType.UNARY_RIGHT):
                 rvar = self.__a_expr(target)
             else:
@@ -946,16 +1166,14 @@ class Analyzer:
                 }
 
             # t1 = a
-            curr = Sentence(Sentence_Type.ASSIGN, value="", lineno=expr.lineno)
-            if self.__last_label:
-                curr.label = self.__last_label
-                self.__last_label = None
+            curr = Sentence(Sentence_Type.LOAD, lineno=expr.lineno)
+            self.__set_label_and_keep_base_block(curr)
             curr.info['lvar'] = value_pass
             curr.info['avar'] = value_pass
             curr.info['rvar'] = rvar
             self.__result.append(curr)
 
-            # t2 = a +/- 1 or t2 = -a or !a
+            # t2 = a +/- 1
             tmp_reg = self.__create_tmp_reg()
             tmp_info = {
                 "type": Reg_Type.TMP_REG,
@@ -963,11 +1181,11 @@ class Analyzer:
                 "size": 32
             }
             if rop.node_type is NodeType.SELF_PLUS:
-                curr = Sentence(Sentence_Type.ADD, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.ADD, lineno=expr.lineno)
             else:
-                curr = Sentence(Sentence_Type.MINUS, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.MINUS, lineno=expr.lineno)
             curr.info['avar'] = tmp_info
-            curr.info['lvar'] = rvar
+            curr.info['lvar'] = value_pass
             curr.info['rvar'] = {
                 "type": "num",
                 "value": "1",
@@ -976,20 +1194,28 @@ class Analyzer:
             self.__result.append(curr)
 
             # a = t2
-            curr = Sentence(Sentence_Type.ASSIGN, value="", lineno=expr.lineno)
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=expr.lineno)
             curr.info['avar'] = rvar
             curr.info['lvar'] = rvar
-            curr.info['rvar'] = tmp_reg
+            curr.info['rvar'] = tmp_info
             self.__result.append(curr)
 
             return value_pass
         elif expr.node_type is NodeType.LOGIC_AND:
             all_leave_label = self.__set_label()
             l_true_label = self.__set_label()
-            and_res_reg = self.__create_tmp_reg()
             and_res = {
                 "type": Reg_Type.TMP_REG,
-                "reg": and_res_reg,
+                "reg": self.__create_tmp_reg(),
+                "size": 1
+            }
+            curr = Sentence(Sentence_Type.DEFINE_LOCAL_VAR, lineno=0)
+            curr.info = and_res
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
+            l_j_info = {
+                "type": Reg_Type.TMP_REG,
+                "reg": self.__create_tmp_reg(),
                 "size": 1
             }
 
@@ -998,8 +1224,20 @@ class Analyzer:
                 l_trans = self.__convert_i32_i1(and_res, l_reg, expr.lineno)
                 self.__result.append(l_trans)
             else:
-                and_res = l_reg
-            self.__create_jump_sentences(and_res, l_true_label, all_leave_label)
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+                curr.info['lvar'] = and_res
+                curr.info['rvar'] = l_reg
+                curr.info['avar'] = and_res
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
+                curr = Sentence(Sentence_Type.LOAD, lineno=0)
+                curr.info['lvar'] = l_j_info
+                curr.info['rvar'] = and_res
+                curr.info['avar'] = l_j_info
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
+
+            self.__create_jump_sentences(l_j_info, l_true_label, all_leave_label)
 
             self.__last_label = l_true_label
             r_reg = self.__process_side_val(expr.info['rvar'])
@@ -1007,17 +1245,43 @@ class Analyzer:
                 r_trans = self.__convert_i32_i1(and_res, r_reg, expr.lineno)
                 self.__result.append(r_trans)
             else:
-                and_res = r_reg
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+                curr.info['lvar'] = and_res
+                curr.info['rvar'] = r_reg
+                curr.info['avar'] = and_res
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
 
             self.__last_label = all_leave_label
+            tmp_info = {
+                "type": Reg_Type.TMP_REG,
+                "reg": self.__create_tmp_reg(),
+                "size": 1
+            }
+            curr = Sentence(Sentence_Type.LOAD, lineno=0)
+            curr.info['lvar'] = tmp_info
+            curr.info['rvar'] = and_res
+            curr.info['avar'] = tmp_info
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
+            and_res = tmp_info
+
             return and_res
         elif expr.node_type is NodeType.LOGIC_OR:
             all_leave_label = self.__set_label()
             l_false_label = self.__set_label()
-            or_res_reg = self.__create_tmp_reg()
             or_res = {
                 "type": Reg_Type.TMP_REG,
-                "reg": or_res_reg,
+                "reg": self.__create_tmp_reg(),
+                "size": 1
+            }
+            curr = Sentence(Sentence_Type.DEFINE_LOCAL_VAR, lineno=0)
+            curr.info = or_res
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
+            l_j_info = {
+                "type": Reg_Type.TMP_REG,
+                "reg": self.__create_tmp_reg(),
                 "size": 1
             }
 
@@ -1026,51 +1290,81 @@ class Analyzer:
                 l_trans = self.__convert_i32_i1(or_res, l_reg, expr.lineno)
                 self.__result.append(l_trans)
             else:
-                or_res = l_reg
-            self.__create_jump_sentences(or_res, all_leave_label, l_false_label)
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+                curr.info['lvar'] = or_res
+                curr.info['rvar'] = l_reg
+                curr.info['avar'] = or_res
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
+                curr = Sentence(Sentence_Type.LOAD, lineno=0)
+                curr.info['lvar'] = l_j_info
+                curr.info['rvar'] = or_res
+                curr.info['avar'] = l_j_info
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
+
+            self.__create_jump_sentences(l_j_info, all_leave_label, l_false_label)
 
             self.__last_label = l_false_label
             r_reg = self.__process_side_val(expr.info['rvar'])
             if r_reg['size'] != 1:
-                r_trans = self.__convert_i32_i1(or_res, r_reg, expr.lineno)
-                self.__result.append(r_trans)
+                l_trans = self.__convert_i32_i1(or_res, r_reg, expr.lineno)
+                self.__result.append(l_trans)
             else:
-                or_res = r_reg
+                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+                curr.info['lvar'] = or_res
+                curr.info['rvar'] = r_reg
+                curr.info['avar'] = or_res
+                self.__set_label_and_keep_base_block(curr)
+                self.__result.append(curr)
 
             self.__last_label = all_leave_label
+            tmp_info = {
+                "type": Reg_Type.TMP_REG,
+                "reg": self.__create_tmp_reg(),
+                "size": 1
+            }
+            curr = Sentence(Sentence_Type.LOAD, lineno=0)
+            curr.info['lvar'] = tmp_info
+            curr.info['rvar'] = or_res
+            curr.info['avar'] = tmp_info
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
+            or_res = tmp_info
+
             return or_res
         else:
             aval_reg_size = 32
             if expr.node_type is NodeType.PLUS:
-                curr = Sentence(Sentence_Type.ADD, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.ADD, lineno=expr.lineno)
             elif expr.node_type is NodeType.MINUS:
-                curr = Sentence(Sentence_Type.MINUS, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.MINUS, lineno=expr.lineno)
             elif expr.node_type is NodeType.TIMES:
-                curr = Sentence(Sentence_Type.TIMES, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.TIMES, lineno=expr.lineno)
             elif expr.node_type is NodeType.DIVIDE:
-                curr = Sentence(Sentence_Type.DIVIDE, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.DIVIDE, lineno=expr.lineno)
             elif expr.node_type is NodeType.MOD:
-                curr = Sentence(Sentence_Type.MOD, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.MOD, lineno=expr.lineno)
             elif expr.node_type is NodeType.EQ:
-                curr = Sentence(Sentence_Type.EQ, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.EQ, lineno=expr.lineno)
                 aval_reg_size = 1
             elif expr.node_type is NodeType.NEQ:
-                curr = Sentence(Sentence_Type.NEQ, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.NEQ, lineno=expr.lineno)
                 aval_reg_size = 1
             elif expr.node_type is NodeType.GT:
-                curr = Sentence(Sentence_Type.GT, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.GT, lineno=expr.lineno)
                 aval_reg_size = 1
             elif expr.node_type is NodeType.GEQ:
-                curr = Sentence(Sentence_Type.GEQ, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.GEQ, lineno=expr.lineno)
                 aval_reg_size = 1
             elif expr.node_type is NodeType.LT:
-                curr = Sentence(Sentence_Type.LT, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.LT, lineno=expr.lineno)
                 aval_reg_size = 1
             elif expr.node_type is NodeType.LEQ:
-                curr = Sentence(Sentence_Type.LEQ, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.LEQ, lineno=expr.lineno)
                 aval_reg_size = 1
             elif expr.node_type is NodeType.NOT:
-                curr = Sentence(Sentence_Type.NOT, value="", lineno=expr.lineno)
+                curr = Sentence(Sentence_Type.NOT, lineno=expr.lineno)
             else:  # NUM, IDENT, ARRAY, FUNC CALL
                 return self.__process_var_use(expr)
             l_reg = self.__process_side_val(expr.info['lvar'])
@@ -1086,8 +1380,6 @@ class Analyzer:
                 "size": aval_reg_size
             }
             curr.info['avar'] = aval_reg_info
-            if self.__last_label:
-                curr.label = self.__last_label
-                self.__last_label = None
+            self.__set_label_and_keep_base_block(curr)
             self.__result.append(curr)
             return aval_reg_info

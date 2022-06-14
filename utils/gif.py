@@ -13,8 +13,6 @@ from typing import Union
 try:
     import imageio
     from matplotlib import pyplot as plt
-    import numpy as np
-    from PIL import Image
 except ImportError as e:
     print(f"[ERROR] {e}")
     sys.exit(0)
@@ -61,6 +59,6 @@ class GifGenerator:
                 plt.text(xs, ypos, i, fontsize=10, ha="left", va="top", bbox=box_style)
                 xs += gap
         plt.savefig(out)
-        img = Image.open(out)
+        img = imageio.imread(out)
         plt.close()
         return img
