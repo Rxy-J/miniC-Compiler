@@ -93,12 +93,10 @@ class Sentence:
         self.info = info
 
     def __repr__(self) -> str:
-        return f"sentence_type->{self.sentence_type.name}, " \
-               f"lineno->{self.lineno}, " \
+        return f"({self.sentence_type.name}, " \
                f"value->{self.value}, " \
                f"label->{self.label}, " \
-               f"reg->{self.reg}, " \
-               f"info->{self.info}"
+               f"info->{self.info})"
 
     def __json__(self) -> dict:
         return {
@@ -571,6 +569,7 @@ class Analyzer:
         :param sym:
         :return:
         """
+        func_name = sym.value
         if self.__check_func_redefinition(sym):
             # check is overload or total redefinition
             for j in self.__function_table[sym.value]:
@@ -584,10 +583,11 @@ class Analyzer:
                     if flag:
                         self.__error(f"Redefine of function {sym.value}, already defined in {j.lineno}", sym.lineno)
                         return False
+            
             sym.value = sym.value + "i" * len(self.__function_table[sym.value])
         else:
             self.__function_table[sym.value] = []
-        self.__function_table[sym.value].append(sym)
+        self.__function_table[func_name].append(sym)
         return True
 
     def __push_var_table(self):
@@ -1085,7 +1085,8 @@ class Analyzer:
                 self.__result.append(curr)
                 value_pass = tmp_info
             else:
-                if rvar.get('reg') and rvar.get("type") is not Reg_Type.TMP_REG:
+                if rvar.get('reg') and (rvar.get("type") is not Reg_Type.TMP_REG and not rvar.get('dimension')):
+                    print(rvar)
                     curr = Sentence(Sentence_Type.LOAD, lineno=expr.lineno)
                     curr.info['avar'] = value_pass
                     curr.info['lvar'] = value_pass
@@ -1213,44 +1214,45 @@ class Analyzer:
             curr.info = and_res
             self.__set_label_and_keep_base_block(curr)
             self.__result.append(curr)
-            l_j_info = {
-                "type": Reg_Type.TMP_REG,
-                "reg": self.__create_tmp_reg(),
-                "size": 1
-            }
+
 
             l_reg = self.__process_side_val(expr.info['lvar'])
             if l_reg['size'] != 1:
-                l_trans = self.__convert_i32_i1(and_res, l_reg, expr.lineno)
+                l_j_info = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 1
+                }
+                l_trans = self.__convert_i32_i1(l_j_info, l_reg, expr.lineno)
                 self.__result.append(l_trans)
-            else:
-                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
-                curr.info['lvar'] = and_res
-                curr.info['rvar'] = l_reg
-                curr.info['avar'] = and_res
-                self.__set_label_and_keep_base_block(curr)
-                self.__result.append(curr)
-                curr = Sentence(Sentence_Type.LOAD, lineno=0)
-                curr.info['lvar'] = l_j_info
-                curr.info['rvar'] = and_res
-                curr.info['avar'] = l_j_info
-                self.__set_label_and_keep_base_block(curr)
-                self.__result.append(curr)
+                l_reg = l_j_info
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+            curr.info['lvar'] = and_res
+            curr.info['rvar'] = l_reg
+            curr.info['avar'] = and_res
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
 
-            self.__create_jump_sentences(l_j_info, l_true_label, all_leave_label)
+            self.__create_jump_sentences(l_reg, l_true_label, all_leave_label)
 
             self.__last_label = l_true_label
             r_reg = self.__process_side_val(expr.info['rvar'])
             if r_reg['size'] != 1:
-                r_trans = self.__convert_i32_i1(and_res, r_reg, expr.lineno)
+                r_j_info = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 1
+                }
+                r_trans = self.__convert_i32_i1(r_j_info, r_reg, expr.lineno)
                 self.__result.append(r_trans)
-            else:
-                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
-                curr.info['lvar'] = and_res
-                curr.info['rvar'] = r_reg
-                curr.info['avar'] = and_res
-                self.__set_label_and_keep_base_block(curr)
-                self.__result.append(curr)
+                r_reg = r_j_info
+
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+            curr.info['lvar'] = and_res
+            curr.info['rvar'] = r_reg
+            curr.info['avar'] = and_res
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
 
             self.__last_label = all_leave_label
             tmp_info = {
@@ -1279,44 +1281,45 @@ class Analyzer:
             curr.info = or_res
             self.__set_label_and_keep_base_block(curr)
             self.__result.append(curr)
-            l_j_info = {
-                "type": Reg_Type.TMP_REG,
-                "reg": self.__create_tmp_reg(),
-                "size": 1
-            }
+
 
             l_reg = self.__process_side_val(expr.info['lvar'])
             if l_reg['size'] != 1:
-                l_trans = self.__convert_i32_i1(or_res, l_reg, expr.lineno)
+                l_j_info = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 1
+                }
+                l_trans = self.__convert_i32_i1(l_j_info, l_reg, expr.lineno)
                 self.__result.append(l_trans)
-            else:
-                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
-                curr.info['lvar'] = or_res
-                curr.info['rvar'] = l_reg
-                curr.info['avar'] = or_res
-                self.__set_label_and_keep_base_block(curr)
-                self.__result.append(curr)
-                curr = Sentence(Sentence_Type.LOAD, lineno=0)
-                curr.info['lvar'] = l_j_info
-                curr.info['rvar'] = or_res
-                curr.info['avar'] = l_j_info
-                self.__set_label_and_keep_base_block(curr)
-                self.__result.append(curr)
+                l_reg = l_j_info
 
-            self.__create_jump_sentences(l_j_info, all_leave_label, l_false_label)
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+            curr.info['lvar'] = or_res
+            curr.info['rvar'] = l_reg
+            curr.info['avar'] = or_res
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
+
+            self.__create_jump_sentences(l_reg, all_leave_label, l_false_label)
 
             self.__last_label = l_false_label
             r_reg = self.__process_side_val(expr.info['rvar'])
             if r_reg['size'] != 1:
-                l_trans = self.__convert_i32_i1(or_res, r_reg, expr.lineno)
+                r_j_info = {
+                    "type": Reg_Type.TMP_REG,
+                    "reg": self.__create_tmp_reg(),
+                    "size": 1
+                }
+                l_trans = self.__convert_i32_i1(r_j_info, r_reg, expr.lineno)
                 self.__result.append(l_trans)
-            else:
-                curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
-                curr.info['lvar'] = or_res
-                curr.info['rvar'] = r_reg
-                curr.info['avar'] = or_res
-                self.__set_label_and_keep_base_block(curr)
-                self.__result.append(curr)
+                r_reg = r_j_info
+            curr = Sentence(Sentence_Type.ASSIGN, lineno=0)
+            curr.info['lvar'] = or_res
+            curr.info['rvar'] = r_reg
+            curr.info['avar'] = or_res
+            self.__set_label_and_keep_base_block(curr)
+            self.__result.append(curr)
 
             self.__last_label = all_leave_label
             tmp_info = {

@@ -31,7 +31,6 @@ STD_FILE = """
 @.str.5 = private unnamed_addr constant [4 x i8] c" %d\\00", align 1
 @.str.6 = private unnamed_addr constant [2 x i8] c"\\0A\\00", align 1
 @.str.7 = private unnamed_addr constant [4 x i8] c"%s\\0A\\00", align 1
-@a = common dso_local global i32 0, align 4
 
 ; Function Attrs: noinline nounwind optnone uwtable
 define dso_local i32 @getint() #0 {
@@ -155,6 +154,7 @@ define dso_local void @putstr(i8* %0) #0 {
   %4 = call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.7, i64 0, i64 0), i8* %3)
   ret void
 }
+
 
 """
 
@@ -618,6 +618,8 @@ class IRGenerator:
             else:
                 dd = dd[1:]
                 d = d[1:]
+            if t.get('dimension'):
+                t = self.__proc_array(t)
             suffix = hashlib.md5(rand().encode('utf-8')).hexdigest()[:6]
             t_ptr = f"{t_ptr}_{suffix}"
             t_type = self.ir.set_type(var.get('size'), dd)

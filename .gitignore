@@ -1,6 +1,7 @@
 build
 dist
 *.gv
+*.dot
 *.json
 *.spec
 *.exe
@@ -9,3 +10,7 @@ test.py
 __pycache__
 .idea
 function
+*.doc
+*.docx
+*.xlsx
+*.xls

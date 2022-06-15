@@ -15,7 +15,7 @@ from utils.lex import Lex
 from utils.yacc import Yacc, CustomYaccEncoder, Node
 from utils.analyzer import Analyzer, CustomAnaEncoder
 from utils.ir import IRGenerator, LLVM
-# from utils.gif import GifGenerator
+from utils.optimizer import Optimizer
 from enum import Enum
 
 EXEC_ = "minic.exe" if "win" in sys.platform else "minic"
@@ -46,20 +46,10 @@ class COMPILE_ACTION(Enum):
     LEX = 1
     YACC = 2
     ANALYZE = 3
-    IR = 4
-    ALL = 5
-    COMPLEX = 6
-
-
-def get_info_from_json(json_data: dict):
-    if json_data.get('tokens', None) is not None:
-        pass
-        return INPUT_TYPE.TOKEN, iter([])
-    elif json_data.get('root', None) is not None:
-        pass
-        return INPUT_TYPE.NODE, Node()
-    else:
-        raise Exception("Unsupported JSON content")
+    CG = 4
+    IR = 5
+    ALL = 6
+    COMPLEX = 7
 
 
 if __name__ == "__main__":
@@ -69,6 +59,7 @@ if __name__ == "__main__":
     argsParser.add_argument("-l", "--lex", action="store_true", default=False, dest="lex", help="词法处理")
     argsParser.add_argument("-y", "--yacc", action="store_true", default=False, dest="yacc", help="语法处理")
     argsParser.add_argument("-a", "--analyze", action="store_true", default=False, dest="analyze", help="语义处理")
+    argsParser.add_argument("-c", "--cg", action="store_true", default=False, dest="cg", help="生成控制流图")
     argsParser.add_argument("-i", "--ir", action="store_true", default=False, dest="ir", help="IR生成")
     argsParser.add_argument("-j", "--json", action="store_true", default=False, dest="json", help="输出为json格式")
     argsParser.add_argument("--duration", type=int, default=1.5, dest="duration", help="符号栈流输出GIF图每帧持续时间")
@@ -100,6 +91,8 @@ if __name__ == "__main__":
         task = COMPILE_ACTION.YACC if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
     if opts.analyze:
         task = COMPILE_ACTION.ANALYZE if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
+    if opts.cg:
+        task = COMPILE_ACTION.CG if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
     if opts.ir:
         task = COMPILE_ACTION.IR if task == COMPILE_ACTION.NONE else COMPILE_ACTION.COMPLEX
     task = COMPILE_ACTION.ALL if task == COMPILE_ACTION.NONE else task
@@ -178,9 +171,6 @@ if __name__ == "__main__":
     if aa.error:
         sys.exit(88)
 
-    with open("res.json", "w", encoding="utf-8") as f:
-        json.dump({"res": res}, f, indent=4, cls=CustomAnaEncoder)
-
     json_VSF = {}
     json_FSF = {}
     for i in range(len(variable_stack_flow)):
@@ -202,21 +192,36 @@ if __name__ == "__main__":
             else:
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(jsonify_SF)
-        # else:
-        #     if output_dest == OUTPUT_TARGET.STDOUT:
-        #         print("[ERROR] The Symbol Stack Flow can't be printed to screen without jsonify, please use set arg '-j' to implement jsonify")
-        #     else:
-        #         frames = []
-        #         for key, value in json_VSF.items():
-        #             texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
-        #             frames.append(GifGenerator.text2png(texts, 8, 15))
-        #         GifGenerator.png2gif(frames, "VSF.gif", duration=gif_duration)
-        #         frames = []
-        #         for key, value in json_FSF.items():
-        #             texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
-        #             frames.append(GifGenerator.text2png(texts, 8, 15))
-        #         GifGenerator.png2gif(frames, "FSF.gif", duration=gif_duration)
+        else:
+            if output_dest == OUTPUT_TARGET.STDOUT:
+                print("[ERROR] The Symbol Stack Flow can't be printed to screen without jsonify, please use set arg '-j' to implement jsonify")
+            else:
+                try:
+                    from utils.gif import GifGenerator
+                    frames = []
+                    for key, value in json_VSF.items():
+                        texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
+                        frames.append(GifGenerator.text2png(texts, 8, 15))
+                    GifGenerator.png2gif(frames, "VSF.gif", duration=gif_duration)
+                    frames = []
+                    for key, value in json_FSF.items():
+                        texts = [json.dumps(i, indent=4, cls=CustomAnaEncoder) for i in value]
+                        frames.append(GifGenerator.text2png(texts, 8, 15))
+                    GifGenerator.png2gif(frames, "FSF.gif", duration=gif_duration)
+                except Exception as e:
+                    print("[ERROR] Can't Generate Gif, please check requirements")
         sys.exit(0)
+
+    if task == COMPILE_ACTION.CG:
+        o = Optimizer(res)
+        cg = o.get_control_graph()
+        if output_dest == OUTPUT_TARGET.STDOUT:
+            print(cg)
+        else:
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(cg)
+        sys.exit(99)
+
     # IR生成
     curr_task = COMPILE_ACTION.IR
     ii = IRGenerator(res, ir=LLVM)

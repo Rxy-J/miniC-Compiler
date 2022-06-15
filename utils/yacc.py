@@ -259,7 +259,6 @@ class Yacc:
         print(
             f"[ERROR] [YACC] [{self.__curr_token.line if self.__curr_token is not None else self.__last_token.line + 1}]: {msg}")
         raise Exception()
-        exit(77)
 
     def parser(self) -> None:
         """
