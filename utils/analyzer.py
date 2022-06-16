@@ -93,10 +93,32 @@ class Sentence:
         self.info = info
 
     def __repr__(self) -> str:
-        return f"({self.sentence_type.name}, " \
-               f"value->{self.value}, " \
-               f"label->{self.label}, " \
-               f"info->{self.info})"
+        if self.label:
+            base = f"{self.label}:\t({self.sentence_type.name}, "
+        else:
+            base = f"\t({self.sentence_type.name}, "
+        if self.sentence_type is Sentence_Type.JMP:
+            base += f"label {self.info['label']})"
+        elif self.sentence_type is Sentence_Type.IF_JMP:
+            base += f"label {self.info['tl']}, label {self.info['fl']})"
+        elif self.sentence_type in [Sentence_Type.DEFINE_LOCAL_VAR, Sentence_Type.DEFINE_LOCAL_ARRAY]:
+            base += f"i{self.info['size']}, {self.info['reg']})"
+        elif self.sentence_type is Sentence_Type.CALL:
+            base += f"{self.info['func_type']} {self.info['func']}() )"
+        elif self.sentence_type in [Sentence_Type.ZEXT, Sentence_Type.LOAD, Sentence_Type.ASSIGN]:
+            aval = self.info['avar']['reg']
+            rval = self.info['rvar'].get('reg') if self.info['rvar'].get('reg') else self.info['rvar'].get('value')
+            base += f"-, {rval}, {aval})"
+        elif self.sentence_type is Sentence_Type.RETURN:
+            regt = self.info['return_reg']
+            ret_v = regt.get('reg') if regt.get('reg') else regt.get('value')
+            base += f"{ret_v})"
+        else:
+            aval = self.info['avar']['reg']
+            lval = self.info['lvar'].get('reg') if self.info['lvar'].get('reg') else self.info['lvar'].get('value')
+            rval = self.info['rvar'].get('reg') if self.info['rvar'].get('reg') else self.info['rvar'].get('value')
+            base += f"{lval}, {rval}, {aval})"
+        return base
 
     def __json__(self) -> dict:
         return {

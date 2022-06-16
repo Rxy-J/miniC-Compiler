@@ -22,7 +22,8 @@ class OptimizeType(Enum):
 
 
 class BaseBlock:
-    def __init__(self, block_id: int, block_label: str, block_content: list[Sentence] = None, block_to: list[str] = None):
+    def __init__(self, block_id: int, block_label: str, block_content: list[Sentence] = None,
+                 block_to: list[str] = None):
         self.block_id = block_id
         self.block_label = block_label
         self.block_content = block_content if block_content else []
@@ -43,7 +44,19 @@ class BaseBlock:
 class Optimizer:
     def __init__(self, sentences: list[Sentence]):
         self.sentences = sentences
-        self.graph = graphviz.Digraph()
+        self.graph = graphviz.Digraph(graph_attr={'compound': 'true',
+                                                  'margin': "0,0",
+                                                  'ranksep': '0.75',
+                                                  'nodesep': '1',
+                                                  'pad': '0.5',
+                                                  'rankdir': 'LR'},
+                                      node_attr={'shape': 'record',
+                                                 'charset': 'UTF-8',
+                                                 'fontname': 'Microsoft YaHei',
+                                                 'fontsize': '14'},
+                                      edge_attr={'charset': 'UTF-8',
+                                                 'fontname': 'Microsoft YaHei',
+                                                 'fontsize': '11'})
         self.block_counter = 0
         self.base_blocks: list[BaseBlock] = []
 
@@ -91,9 +104,8 @@ class Optimizer:
         for block in self.base_blocks:
             if block.block_label is None:
                 block.block_label = f"KS{block.block_id}"
-            self.graph.node(block.block_label)
+            content = [f"<s{block.block_content.index(i)}>{i}" for i in block.block_content]
+            self.graph.node(block.block_label, label="|".join(content))
             for to_label in block.block_to:
-                self.graph.edge(block.block_label, to_label)
+                self.graph.edge(block.block_label, f"{to_label}")
         return self.graph.source
-
-
