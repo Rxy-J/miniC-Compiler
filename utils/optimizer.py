@@ -9,6 +9,8 @@
 
 import re
 import sys
+from typing import Any
+
 import graphviz
 
 from enum import Enum
@@ -99,7 +101,7 @@ class Optimizer:
         self.base_blocks.append(bb)
         return pos + 1
 
-    def get_control_graph(self) -> str:
+    def get_control_graph(self) -> tuple[str, graphviz.Digraph.render]:
         self.get_base_block()
         for block in self.base_blocks:
             if block.block_label is None:
@@ -108,4 +110,4 @@ class Optimizer:
             self.graph.node(block.block_label, label="|".join(content))
             for to_label in block.block_to:
                 self.graph.edge(block.block_label, f"{to_label}")
-        return self.graph.source
+        return self.graph.source, self.graph.render

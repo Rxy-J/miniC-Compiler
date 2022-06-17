@@ -172,8 +172,9 @@ attributes #1 = { "correctly-rounded-divide-sqrt-fp-math"="false" "disable-tail-
 
 T_V = namedtuple("T_V", ["type", "value"])
 
+
 def rand(typ: int = 0, length: int = 6) -> str:
-    Digit ="0123456789"
+    Digit = "0123456789"
     LAlpha = "abcdefghijklmnopqrstuvwxyz"
     BAlpha = "ABCDEFGHIJKLMNOPQRISUVWXYZ"
     if typ < 1:
@@ -188,6 +189,7 @@ def rand(typ: int = 0, length: int = 6) -> str:
     for i in range(length):
         res += random.choice(target)
     return res
+
 
 class LLVM:
     """

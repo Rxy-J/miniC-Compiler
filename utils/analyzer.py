@@ -100,7 +100,7 @@ class Sentence:
         if self.sentence_type is Sentence_Type.JMP:
             base += f"label {self.info['label']})"
         elif self.sentence_type is Sentence_Type.IF_JMP:
-            base += f"label {self.info['tl']}, label {self.info['fl']})"
+            base += f"{self.info['var']['reg']}, label {self.info['tl']}, label {self.info['fl']})"
         elif self.sentence_type in [Sentence_Type.DEFINE_LOCAL_VAR, Sentence_Type.DEFINE_LOCAL_ARRAY]:
             base += f"i{self.info['size']}, {self.info['reg']})"
         elif self.sentence_type is Sentence_Type.CALL:

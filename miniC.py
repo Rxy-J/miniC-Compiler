@@ -143,6 +143,7 @@ if __name__ == "__main__":
     yy.parser()
     json_ast = {"root": yy.ast}  # 该AST原生格式为JSON格式
     gv_ast = yy.graph.source
+    render = yy.graph.render
 
     # 如果目标任务为语法分析
     if curr_task.value >= task.value:
@@ -158,6 +159,7 @@ if __name__ == "__main__":
             if output_dest == OUTPUT_TARGET.STDOUT:
                 print(gv_ast)
             else:
+                render(f'{output_file}', format='png')
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(gv_ast)
         sys.exit(0)
@@ -214,10 +216,11 @@ if __name__ == "__main__":
 
     if task == COMPILE_ACTION.CG:
         o = Optimizer(res)
-        cg = o.get_control_graph()
+        cg, render = o.get_control_graph()
         if output_dest == OUTPUT_TARGET.STDOUT:
             print(cg)
         else:
+            render(f"{output_file}", format='png')
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(cg)
         sys.exit(99)
